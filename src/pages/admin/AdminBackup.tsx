@@ -19,6 +19,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
+import { AdminOtpVerification } from "@/components/admin/AdminOtpVerification";
 import JSZip from "jszip";
 
 interface BackupSettings {
@@ -82,6 +83,10 @@ export default function AdminBackup() {
   const [backupStatus, setBackupStatus] = useState("");
   const [restoreAuth, setRestoreAuth] = useState(true);
   const [isDumpingSQL, setIsDumpingSQL] = useState(false);
+  
+  // OTP verification states
+  const [otpDialogOpen, setOtpDialogOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"sql_dump" | "restore" | null>(null);
 
   useEffect(() => {
     fetchSettings();
@@ -349,6 +354,27 @@ export default function AdminBackup() {
     } finally {
       setIsDumpingSQL(false);
     }
+  };
+
+  // OTP-protected wrappers
+  const requestSQLDump = () => {
+    setPendingAction("sql_dump");
+    setOtpDialogOpen(true);
+  };
+
+  const requestRestore = () => {
+    if (!selectedFile) return;
+    setPendingAction("restore");
+    setOtpDialogOpen(true);
+  };
+
+  const handleOtpVerified = () => {
+    if (pendingAction === "sql_dump") {
+      downloadSQLDump();
+    } else if (pendingAction === "restore") {
+      handleRestore();
+    }
+    setPendingAction(null);
   };
 
   const handleRestore = async () => {
@@ -663,7 +689,7 @@ export default function AdminBackup() {
               <Button
                 variant="secondary"
                 className="w-full"
-                onClick={downloadSQLDump}
+                onClick={requestSQLDump}
                 disabled={isDumpingSQL || isBackingUp}
               >
                 {isDumpingSQL ? (
@@ -674,7 +700,7 @@ export default function AdminBackup() {
                 Download SQL Dump
               </Button>
               <p className="text-xs text-muted-foreground text-center mt-2">
-                Full SQL file with schema + data (requires DB URL secret)
+                Full SQL file with schema + data (OTP verified)
               </p>
             </div>
           </CardContent>
@@ -769,7 +795,7 @@ export default function AdminBackup() {
             </Button>
             <Button
               variant="destructive"
-              onClick={handleRestore}
+              onClick={requestRestore}
               disabled={!selectedFile || isRestoring}
             >
               {isRestoring ? (
@@ -780,6 +806,19 @@ export default function AdminBackup() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Admin OTP Verification Dialog */}
+      <AdminOtpVerification
+        open={otpDialogOpen}
+        onOpenChange={setOtpDialogOpen}
+        onVerified={handleOtpVerified}
+        title="Admin Verification"
+        description={
+          pendingAction === "sql_dump"
+            ? "Verify your identity to download the SQL dump."
+            : "Verify your identity to restore the backup."
+        }
+      />
     </div>
   );
 }
