@@ -44,8 +44,12 @@ serve(async (req) => {
       if (typeof balanceData === 'number') {
         balance = balanceData;
       } else if (typeof balanceData === 'object' && balanceData !== null) {
-        // Try common field names
-        balance = balanceData.remaining_unit || balanceData.balance || balanceData.units || balanceData.sms_unit || 0;
+        // Try common field names - remaining_balance is what Text.lk returns
+        balance = balanceData.remaining_balance || balanceData.remaining_unit || balanceData.balance || balanceData.units || balanceData.sms_unit || 0;
+        // Parse if it's a string
+        if (typeof balance === 'string') {
+          balance = parseFloat(balance) || 0;
+        }
       } else if (typeof balanceData === 'string') {
         // Try to parse if it's a string number
         balance = parseFloat(balanceData) || 0;
