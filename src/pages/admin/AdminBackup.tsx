@@ -6,7 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Download, Upload, RefreshCw, Clock, Database, HardDrive, AlertTriangle } from "lucide-react";
+import { Loader2, Download, Upload, RefreshCw, Clock, Database, HardDrive, AlertTriangle, FileCode, Users } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Dialog,
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { Checkbox } from "@/components/ui/checkbox";
 import JSZip from "jszip";
 
 interface BackupSettings {
@@ -79,6 +80,8 @@ export default function AdminBackup() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [backupProgress, setBackupProgress] = useState(0);
   const [backupStatus, setBackupStatus] = useState("");
+  const [restoreAuth, setRestoreAuth] = useState(true);
+  const [isDumpingSQL, setIsDumpingSQL] = useState(false);
 
   useEffect(() => {
     fetchSettings();
@@ -300,6 +303,54 @@ export default function AdminBackup() {
     return files;
   };
 
+  const downloadSQLDump = async () => {
+    setIsDumpingSQL(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/db-dump`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to generate SQL dump");
+      }
+
+      const sqlContent = await response.text();
+      const blob = new Blob([sqlContent], { type: "application/sql" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `db-dump-${new Date().toISOString().split("T")[0]}.sql`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: "SQL Dump Complete",
+        description: "Full database SQL dump has been downloaded.",
+      });
+    } catch (error) {
+      console.error("SQL dump error:", error);
+      toast({
+        title: "SQL Dump Failed",
+        description: error instanceof Error ? error.message : "Could not create SQL dump.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDumpingSQL(false);
+    }
+  };
+
   const handleRestore = async () => {
     if (!selectedFile) return;
 
@@ -411,9 +462,53 @@ export default function AdminBackup() {
         }
       }
 
+      // Restore auth users if enabled and profiles exist
+      let authResult = null;
+      if (restoreAuth && manifest.tables.profiles) {
+        setBackupStatus("Restoring user accounts...");
+        const profiles = manifest.tables.profiles as Array<{
+          user_id: string;
+          email: string;
+          first_name: string;
+          last_name: string;
+          phone: string;
+        }>;
+
+        const profilesWithEmail = profiles.filter((p) => p.email);
+        if (profilesWithEmail.length > 0) {
+          try {
+            const response = await fetch(
+              `${supabaseUrl}/functions/v1/restore-auth-users`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ profiles: profilesWithEmail }),
+              }
+            );
+
+            if (response.ok) {
+              authResult = await response.json();
+            }
+          } catch (authError) {
+            console.error("Auth restore error:", authError);
+          }
+        }
+      }
+
+      let description = `Restored ${tableEntries.length} tables`;
+      if (filesToRestore.length > 0) {
+        description += ` and ${filesToRestore.length} files`;
+      }
+      if (authResult) {
+        description += `. Users: ${authResult.created} created, ${authResult.skipped} skipped, ${authResult.resetEmailsSent} reset emails sent`;
+      }
+
       toast({ 
         title: "Restore complete", 
-        description: `Restored ${tableEntries.length} tables${filesToRestore.length > 0 ? ` and ${filesToRestore.length} files` : ""}.`
+        description
       });
       setRestoreDialogOpen(false);
       setSelectedFile(null);
@@ -563,6 +658,25 @@ export default function AdminBackup() {
                 ALL database tables + ALL storage files (models, payment slips, assets, products)
               </p>
             </div>
+
+            <div className="border-t pt-4">
+              <Button
+                variant="secondary"
+                className="w-full"
+                onClick={downloadSQLDump}
+                disabled={isDumpingSQL || isBackingUp}
+              >
+                {isDumpingSQL ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <FileCode className="w-4 h-4 mr-2" />
+                )}
+                Download SQL Dump
+              </Button>
+              <p className="text-xs text-muted-foreground text-center mt-2">
+                Full SQL file with schema + data (requires DB URL secret)
+              </p>
+            </div>
           </CardContent>
         </Card>
 
@@ -620,6 +734,23 @@ export default function AdminBackup() {
                 Selected: {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
               </p>
             )}
+
+            <div className="flex items-start space-x-3 p-3 border rounded-lg bg-muted/30">
+              <Checkbox
+                id="restore-auth"
+                checked={restoreAuth}
+                onCheckedChange={(checked) => setRestoreAuth(checked === true)}
+              />
+              <div className="space-y-1">
+                <label htmlFor="restore-auth" className="text-sm font-medium cursor-pointer flex items-center gap-2">
+                  <Users className="w-4 h-4" />
+                  Restore User Accounts
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Recreates auth accounts from profile emails and sends password reset emails to users
+                </p>
+              </div>
+            </div>
 
             {isRestoring && (
               <div className="space-y-2">
