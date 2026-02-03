@@ -23,7 +23,7 @@ export function useContactInfo() {
         .from("system_settings")
         .select("value")
         .eq("key", "contact_config")
-        .single();
+        .maybeSingle();
 
       if (!error && data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
         setContactInfo({ ...defaultContactConfig, ...(data.value as unknown as ContactConfig) });

@@ -72,9 +72,9 @@ export default function Pricing() {
   const fetchPricingConfig = async () => {
     try {
       const [pricingResult, deliveryResult, imagesResult] = await Promise.all([
-        supabase.from("system_settings").select("value").eq("key", "pricing_config").single(),
-        supabase.from("system_settings").select("value").eq("key", "delivery_config").single(),
-        supabase.from("system_settings").select("value").eq("key", "pricing_images").single(),
+        supabase.from("system_settings").select("value").eq("key", "pricing_config").maybeSingle(),
+        supabase.from("system_settings").select("value").eq("key", "delivery_config").maybeSingle(),
+        supabase.from("system_settings").select("value").eq("key", "pricing_images").maybeSingle(),
       ]);
 
       if (pricingResult.data?.value && typeof pricingResult.data.value === 'object') {

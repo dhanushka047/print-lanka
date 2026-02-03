@@ -176,7 +176,7 @@ export default function AdminOrders() {
       .from("system_settings")
       .select("value")
       .eq("key", "pricing_config")
-      .single();
+      .maybeSingle();
 
     if (!error && data?.value) {
       setPricingConfig(data.value as unknown as PricingConfig);
@@ -232,9 +232,9 @@ export default function AdminOrders() {
 
   const fetchOrders = async () => {
     try {
-      const { data: ordersData, error: ordersError } = await supabase
-        .from("orders")
-        .select(`
+      // Self-hosted installs may be missing newer columns (e.g. weight_grams).
+      // We attempt the newest select first, then retry with a fallback select.
+      const selectWithWeight = `
           *,
           order_items (
             id,
@@ -256,8 +256,45 @@ export default function AdminOrders() {
             verified,
             uploaded_at
           )
-        `)
-        .order("created_at", { ascending: false });
+        `;
+
+      const selectFallback = `
+          *,
+          order_items (
+            id,
+            file_name,
+            file_path,
+            quantity,
+            color,
+            material,
+            quality,
+            infill_percentage,
+            price,
+            notes
+          ),
+          payment_slips (
+            id,
+            file_name,
+            file_path,
+            verified,
+            uploaded_at
+          )
+        `;
+
+      const runOrdersQuery = (select: string) =>
+        supabase
+          .from("orders")
+          .select(select)
+          .order("created_at", { ascending: false });
+
+      let { data: ordersData, error: ordersError } = await runOrdersQuery(selectWithWeight);
+
+      if (ordersError?.code === "42703") {
+        // column does not exist
+        const retry = await runOrdersQuery(selectFallback);
+        ordersData = retry.data;
+        ordersError = retry.error;
+      }
 
       if (ordersError) {
         console.error("Error fetching orders:", ordersError);
@@ -266,8 +303,9 @@ export default function AdminOrders() {
         return;
       }
 
-      const userIds = [...new Set(ordersData?.map(o => o.user_id) || [])];
-      const orderIds = ordersData?.map(o => o.id) || [];
+      const safeOrders = ((ordersData as any[]) ?? []) as any[];
+      const userIds = [...new Set(safeOrders.map((o) => o.user_id).filter(Boolean))];
+      const orderIds = safeOrders.map((o) => o.id).filter(Boolean);
       
       // Fetch profiles
       const { data: profilesData, error: profilesError } = await supabase
@@ -317,7 +355,7 @@ export default function AdminOrders() {
         });
       });
 
-      const mappedOrders: Order[] = (ordersData || []).map((order: any) => ({
+      const mappedOrders: Order[] = safeOrders.map((order: any) => ({
         ...order,
         profile: profileMap.get(order.user_id) || null,
         payment_slips: order.payment_slips || [],
