@@ -79,14 +79,18 @@ export default function AdminBackup() {
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedSqlFile, setSelectedSqlFile] = useState<File | null>(null);
   const [backupProgress, setBackupProgress] = useState(0);
   const [backupStatus, setBackupStatus] = useState("");
   const [restoreAuth, setRestoreAuth] = useState(true);
   const [isDumpingSQL, setIsDumpingSQL] = useState(false);
+  const [isRestoringSql, setIsRestoringSql] = useState(false);
+  const [sqlRestoreDialogOpen, setSqlRestoreDialogOpen] = useState(false);
   
   // OTP verification states
   const [otpDialogOpen, setOtpDialogOpen] = useState(false);
-  const [pendingAction, setPendingAction] = useState<"sql_dump" | "restore" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"sql_dump" | "restore" | "sql_restore" | null>(null);
+  const [verifiedSessionId, setVerifiedSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchSettings();
@@ -368,13 +372,87 @@ export default function AdminBackup() {
     setOtpDialogOpen(true);
   };
 
-  const handleOtpVerified = () => {
+  const requestSqlRestore = () => {
+    if (!selectedSqlFile) return;
+    setPendingAction("sql_restore");
+    setOtpDialogOpen(true);
+  };
+
+  const handleOtpVerified = (sessionId?: string) => {
+    if (sessionId) {
+      setVerifiedSessionId(sessionId);
+    }
     if (pendingAction === "sql_dump") {
       downloadSQLDump();
     } else if (pendingAction === "restore") {
       handleRestore();
+    } else if (pendingAction === "sql_restore") {
+      handleSqlRestore(sessionId);
     }
     setPendingAction(null);
+  };
+
+  const handleSqlRestore = async (sessionId?: string) => {
+    if (!selectedSqlFile) return;
+
+    setIsRestoringSql(true);
+    setBackupProgress(0);
+    setBackupStatus("Reading SQL file...");
+
+    try {
+      const sqlContent = await selectedSqlFile.text();
+      
+      setBackupStatus("Executing SQL statements...");
+      setBackupProgress(30);
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/restore-sql`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ 
+            sqlContent,
+            sessionId: sessionId || verifiedSessionId
+          }),
+        }
+      );
+
+      setBackupProgress(90);
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to restore SQL");
+      }
+
+      const result = await response.json();
+      setBackupProgress(100);
+
+      toast({
+        title: "SQL Restore Complete",
+        description: `Executed ${result.stats.executed} statements, skipped ${result.stats.skipped}, ${result.stats.errors} errors`,
+      });
+
+      setSqlRestoreDialogOpen(false);
+      setSelectedSqlFile(null);
+    } catch (error) {
+      console.error("SQL restore error:", error);
+      toast({
+        title: "SQL Restore Failed",
+        description: error instanceof Error ? error.message : "Could not restore from SQL file.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsRestoringSql(false);
+      setBackupProgress(0);
+      setBackupStatus("");
+      setVerifiedSessionId(null);
+    }
   };
 
   const handleRestore = async () => {
@@ -726,10 +804,16 @@ export default function AdminBackup() {
               </AlertDescription>
             </Alert>
 
-            <Button variant="outline" onClick={() => setRestoreDialogOpen(true)}>
-              <Upload className="w-4 h-4 mr-2" />
-              Upload Backup File
-            </Button>
+            <div className="flex gap-4 flex-wrap">
+              <Button variant="outline" onClick={() => setRestoreDialogOpen(true)}>
+                <Upload className="w-4 h-4 mr-2" />
+                Upload Backup (ZIP)
+              </Button>
+              <Button variant="outline" onClick={() => setSqlRestoreDialogOpen(true)}>
+                <FileCode className="w-4 h-4 mr-2" />
+                Restore from SQL
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -807,6 +891,73 @@ export default function AdminBackup() {
         </DialogContent>
       </Dialog>
 
+      {/* SQL Restore Dialog */}
+      <Dialog open={sqlRestoreDialogOpen} onOpenChange={setSqlRestoreDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileCode className="w-5 h-5" />
+              Restore from SQL File
+            </DialogTitle>
+            <DialogDescription>
+              Upload a SQL dump file to restore your database. This will execute INSERT statements from the file.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Warning</AlertTitle>
+              <AlertDescription>
+                This will execute SQL statements directly. Only use SQL files you created from the SQL Dump feature.
+              </AlertDescription>
+            </Alert>
+
+            <div className="space-y-2">
+              <Label htmlFor="sql-file">SQL File (.sql)</Label>
+              <Input
+                id="sql-file"
+                type="file"
+                accept=".sql"
+                onChange={(e) => setSelectedSqlFile(e.target.files?.[0] || null)}
+              />
+            </div>
+
+            {selectedSqlFile && (
+              <p className="text-sm text-muted-foreground">
+                Selected: {selectedSqlFile.name} ({(selectedSqlFile.size / 1024).toFixed(2)} KB)
+              </p>
+            )}
+
+            {isRestoringSql && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">{backupStatus}</span>
+                  <span className="font-medium">{Math.round(backupProgress)}%</span>
+                </div>
+                <Progress value={backupProgress} className="h-2" />
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSqlRestoreDialogOpen(false)} disabled={isRestoringSql}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={requestSqlRestore}
+              disabled={!selectedSqlFile || isRestoringSql}
+            >
+              {isRestoringSql ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : null}
+              Restore from SQL
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Admin OTP Verification Dialog */}
       <AdminOtpVerification
         open={otpDialogOpen}
@@ -816,6 +967,8 @@ export default function AdminBackup() {
         description={
           pendingAction === "sql_dump"
             ? "Verify your identity to download the SQL dump."
+            : pendingAction === "sql_restore"
+            ? "Verify your identity to restore from SQL file."
             : "Verify your identity to restore the backup."
         }
       />
