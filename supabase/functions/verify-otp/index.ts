@@ -9,6 +9,8 @@ const corsHeaders = {
 interface VerifyRequest {
   phone: string;
   otp_code: string;
+  // Backwards compatibility: some older clients send `otp`
+  otp?: string;
 }
 
 serve(async (req) => {
@@ -21,9 +23,11 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { phone, otp_code }: VerifyRequest = await req.json();
+    const { phone, otp_code, otp }: VerifyRequest = await req.json();
 
-    if (!phone || !otp_code) {
+    const providedOtp = otp_code ?? otp;
+
+    if (!phone || !providedOtp) {
       return new Response(
         JSON.stringify({ error: 'Phone and OTP code are required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -96,7 +100,7 @@ serve(async (req) => {
       .eq('id', session.id);
 
     // Verify OTP
-    if (session.otp_code !== otp_code) {
+    if (session.otp_code !== providedOtp) {
       const remainingAttempts = 4 - (session.attempts || 0);
       return new Response(
         JSON.stringify({ 
