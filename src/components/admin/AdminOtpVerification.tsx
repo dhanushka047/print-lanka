@@ -16,7 +16,7 @@ import { Loader2, ShieldCheck } from "lucide-react";
 interface AdminOtpVerificationProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onVerified: () => void;
+  onVerified: (sessionId?: string) => void;
   title?: string;
   description?: string;
 }
@@ -119,7 +119,7 @@ export function AdminOtpVerification({
         description: "Admin verification successful",
       });
       onOpenChange(false);
-      onVerified();
+      onVerified(data.session_id);
     } catch (error) {
       console.error("OTP verify error:", error);
       toast({
