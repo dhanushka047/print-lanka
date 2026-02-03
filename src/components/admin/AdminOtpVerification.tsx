@@ -107,7 +107,7 @@ export function AdminOtpVerification({
     setIsVerifying(true);
     try {
       const { data, error } = await supabase.functions.invoke("verify-otp", {
-        body: { phone, otp },
+        body: { phone, otp_code: otp },
       });
 
       if (error || !data?.success) {
