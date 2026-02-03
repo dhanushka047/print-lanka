@@ -639,6 +639,95 @@ SELECT * FROM pg_policies WHERE schemaname = 'public';
 DROP POLICY IF EXISTS "policy_name" ON table_name;
 ```
 
+#### Missing column errors (e.g., "column does not exist")
+
+If you see errors like `column order_items.weight_grams does not exist`, it means migrations weren't fully applied:
+
+```bash
+# Connect to database
+docker exec -it supabase-db psql -U postgres -d postgres
+```
+
+**Add missing columns to `order_items`:**
+
+```sql
+-- Check current columns
+\d order_items
+
+-- Add missing columns
+ALTER TABLE public.order_items 
+ADD COLUMN IF NOT EXISTS weight_grams numeric;
+
+ALTER TABLE public.order_items 
+ADD COLUMN IF NOT EXISTS price numeric;
+
+ALTER TABLE public.order_items 
+ADD COLUMN IF NOT EXISTS file_size bigint;
+```
+
+**Add missing columns to `orders`:**
+
+```sql
+ALTER TABLE public.orders 
+ADD COLUMN IF NOT EXISTS delivery_charge numeric DEFAULT 0;
+
+ALTER TABLE public.orders 
+ADD COLUMN IF NOT EXISTS priced_at timestamp with time zone;
+
+ALTER TABLE public.orders 
+ADD COLUMN IF NOT EXISTS paid_at timestamp with time zone;
+
+ALTER TABLE public.orders 
+ADD COLUMN IF NOT EXISTS payment_rejection_reason text;
+
+ALTER TABLE public.orders 
+ADD COLUMN IF NOT EXISTS rejection_reason text;
+
+ALTER TABLE public.orders 
+ADD COLUMN IF NOT EXISTS tracking_number text;
+```
+
+**Full schema verification script:**
+
+```sql
+-- Run this to check all tables have required columns
+DO $$
+BEGIN
+  -- order_items columns
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='order_items' AND column_name='weight_grams') THEN
+    ALTER TABLE public.order_items ADD COLUMN weight_grams numeric;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='order_items' AND column_name='price') THEN
+    ALTER TABLE public.order_items ADD COLUMN price numeric;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='order_items' AND column_name='file_size') THEN
+    ALTER TABLE public.order_items ADD COLUMN file_size bigint;
+  END IF;
+  
+  -- orders columns  
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='delivery_charge') THEN
+    ALTER TABLE public.orders ADD COLUMN delivery_charge numeric DEFAULT 0;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='priced_at') THEN
+    ALTER TABLE public.orders ADD COLUMN priced_at timestamp with time zone;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='paid_at') THEN
+    ALTER TABLE public.orders ADD COLUMN paid_at timestamp with time zone;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='payment_rejection_reason') THEN
+    ALTER TABLE public.orders ADD COLUMN payment_rejection_reason text;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='rejection_reason') THEN
+    ALTER TABLE public.orders ADD COLUMN rejection_reason text;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='tracking_number') THEN
+    ALTER TABLE public.orders ADD COLUMN tracking_number text;
+  END IF;
+  
+  RAISE NOTICE 'Schema verification complete';
+END $$;
+```
+
 ### Storage Restore Errors (Critical for ZIP Backup Restore)
 
 When restoring from a ZIP backup on self-hosted Supabase, you may encounter:
