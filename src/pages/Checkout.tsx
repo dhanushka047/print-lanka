@@ -146,7 +146,7 @@ export default function Checkout() {
         .from("system_settings")
         .select("value")
         .eq("key", "contact_config")
-        .single();
+        .maybeSingle();
 
       if (data?.value && typeof data.value === 'object' && !Array.isArray(data.value)) {
         const config = data.value as { admin_phone?: string };
