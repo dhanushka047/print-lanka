@@ -639,6 +639,174 @@ SELECT * FROM pg_policies WHERE schemaname = 'public';
 DROP POLICY IF EXISTS "policy_name" ON table_name;
 ```
 
+### Storage Restore Errors (Critical for ZIP Backup Restore)
+
+When restoring from a ZIP backup on self-hosted Supabase, you may encounter:
+
+- **"StorageApiError: new row violates row-level security policy"**
+- **CORS blocked errors**
+- **504 Gateway Timeout / 502 Bad Gateway**
+
+#### 1. Fix Storage RLS Policies
+
+Self-hosted Supabase requires explicit storage RLS policies. Run these SQL commands:
+
+```sql
+-- Enable RLS on storage.objects (if not enabled)
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+
+-- Allow authenticated users to upload to all buckets
+CREATE POLICY "Allow authenticated uploads"
+ON storage.objects FOR INSERT
+TO authenticated
+WITH CHECK (true);
+
+-- Allow authenticated users to update their uploads
+CREATE POLICY "Allow authenticated updates"
+ON storage.objects FOR UPDATE
+TO authenticated
+USING (true)
+WITH CHECK (true);
+
+-- Allow authenticated users to delete
+CREATE POLICY "Allow authenticated deletes"
+ON storage.objects FOR DELETE
+TO authenticated
+USING (true);
+
+-- Allow public read for public buckets
+CREATE POLICY "Allow public read for public buckets"
+ON storage.objects FOR SELECT
+TO public
+USING (bucket_id IN ('site-assets', 'shop-products'));
+
+-- Allow authenticated read for private buckets
+CREATE POLICY "Allow authenticated read for private buckets"
+ON storage.objects FOR SELECT
+TO authenticated
+USING (bucket_id IN ('models', 'payment-slips'));
+```
+
+Or for admin-only restore operations:
+
+```sql
+-- Allow service role full access (for restore operations)
+CREATE POLICY "Service role full access"
+ON storage.objects
+TO service_role
+USING (true)
+WITH CHECK (true);
+```
+
+#### 2. Fix CORS for Storage
+
+Edit your Supabase Kong configuration (`/opt/supabase/docker/volumes/api/kong.yml`):
+
+```yaml
+# Add or update CORS plugin for storage
+plugins:
+  - name: cors
+    config:
+      origins:
+        - "*"  # Or your specific domain
+      methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      headers:
+        - Accept
+        - Accept-Version
+        - Authorization
+        - Content-Length
+        - Content-Type
+        - X-Client-Info
+        - apikey
+        - x-upsert
+      exposed_headers:
+        - X-Supabase-Api-Version
+      credentials: true
+      max_age: 3600
+```
+
+Restart Kong after changes:
+
+```bash
+docker compose restart kong
+```
+
+#### 3. Alternative: Direct Storage Restore via CLI
+
+If web restore fails, use Supabase CLI for storage:
+
+```bash
+# Extract backup ZIP
+unzip backup-full-2026-02-03.zip -d restore_temp
+
+# Upload files directly using supabase CLI
+cd restore_temp/storage
+
+# For each bucket
+for bucket in models payment-slips site-assets shop-products; do
+  if [ -d "$bucket" ]; then
+    echo "Uploading $bucket..."
+    find $bucket -type f -exec sh -c '
+      supabase storage cp "$1" "sb://'$bucket'/$(dirname "$1" | sed "s|^'$bucket'/||")"
+    ' _ {} \;
+  fi
+done
+```
+
+#### 4. Alternative: Direct PostgreSQL Storage Insert
+
+For maximum control, insert directly via psql:
+
+```bash
+# Connect to database
+docker exec -it supabase-db psql -U postgres -d postgres
+
+# Then insert storage object records
+INSERT INTO storage.objects (bucket_id, name, owner, created_at, updated_at)
+SELECT 'models', path, auth.uid(), now(), now()
+FROM (VALUES ('file1.stl'), ('file2.stl')) AS t(path);
+```
+
+#### 5. Increase Timeouts for Large Files
+
+Edit Nginx configuration:
+
+```nginx
+location /storage/v1/ {
+    proxy_pass http://localhost:8000;
+    proxy_read_timeout 300;
+    proxy_connect_timeout 300;
+    proxy_send_timeout 300;
+    client_max_body_size 100M;
+    
+    # Disable buffering for uploads
+    proxy_request_buffering off;
+    proxy_buffering off;
+}
+```
+
+Edit Kong timeout in `docker-compose.yml`:
+
+```yaml
+kong:
+  environment:
+    - KONG_NGINX_PROXY_PROXY_READ_TIMEOUT=300000
+    - KONG_NGINX_PROXY_PROXY_SEND_TIMEOUT=300000
+```
+
+Restart services:
+
+```bash
+docker compose restart kong
+sudo systemctl restart nginx
+```
+
 ### Nginx Issues
 
 #### 502 Bad Gateway
