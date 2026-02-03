@@ -194,10 +194,20 @@ serve(async (req) => {
           const values = columns.map((col) => {
             const val = rowData[col];
             if (val === null) return "NULL";
-            if (typeof val === "string") return `'${val.replace(/'/g, "''")}'`;
+            if (typeof val === "string") {
+              // Escape backslashes first, then single quotes
+              const escaped = val.replace(/\\/g, "\\\\").replace(/'/g, "''");
+              return `E'${escaped}'`;
+            }
             if (typeof val === "boolean") return val ? "TRUE" : "FALSE";
             if (val instanceof Date) return `'${val.toISOString()}'`;
-            if (typeof val === "object") return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
+            if (typeof val === "object") {
+              // For JSON/JSONB fields, use proper escaping with E'' syntax
+              const jsonStr = JSON.stringify(val);
+              // Escape backslashes first, then single quotes
+              const escaped = jsonStr.replace(/\\/g, "\\\\").replace(/'/g, "''");
+              return `E'${escaped}'::jsonb`;
+            }
             return String(val);
           });
 
