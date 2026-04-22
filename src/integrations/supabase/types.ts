@@ -473,10 +473,10 @@ export type Database = {
           address: string | null
           created_at: string
           email: string | null
-          first_name: string
+          first_name: string | null
           id: string
-          last_name: string
-          phone: string
+          last_name: string | null
+          phone: string | null
           phone_verified: boolean | null
           updated_at: string
           user_id: string
@@ -485,10 +485,10 @@ export type Database = {
           address?: string | null
           created_at?: string
           email?: string | null
-          first_name: string
+          first_name?: string | null
           id?: string
-          last_name: string
-          phone: string
+          last_name?: string | null
+          phone?: string | null
           phone_verified?: boolean | null
           updated_at?: string
           user_id: string
@@ -497,10 +497,10 @@ export type Database = {
           address?: string | null
           created_at?: string
           email?: string | null
-          first_name?: string
+          first_name?: string | null
           id?: string
-          last_name?: string
-          phone?: string
+          last_name?: string | null
+          phone?: string | null
           phone_verified?: boolean | null
           updated_at?: string
           user_id?: string
