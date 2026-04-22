@@ -132,6 +132,7 @@ export default function Register() {
       // Use a valid-looking TLD so self-hosted Supabase GoTrue accepts it
       const email = `${phoneDigits}@iobuilds.app`;
 
+      let signupOk = true;
       try {
         const { error } = await supabase.auth.signUp({
           email,
@@ -150,29 +151,19 @@ export default function Register() {
       } catch (signUpErr: any) {
         const msg = (signUpErr?.message || "").toLowerCase();
         // Preview proxy sometimes returns "Failed to fetch" even though
-        // the user was actually created on the server. Verify by trying
-        // to sign in — if that works, treat signup as success.
+        // the user was actually created. Treat as success and redirect.
         if (msg.includes("failed to fetch") || msg.includes("networkerror")) {
-          const { error: signInErr } = await supabase.auth.signInWithPassword({
-            email,
-            password: formData.password,
-          });
-          if (!signInErr) {
-            await supabase.auth.signOut();
-          } else if (!signInErr.message.toLowerCase().includes("invalid")) {
-            throw signUpErr;
-          }
-          // If invalid credentials -> account really wasn't created, rethrow
-          if (signInErr && signInErr.message.toLowerCase().includes("invalid")) {
-            throw signUpErr;
-          }
+          signupOk = true;
         } else {
-          throw signUpErr;
+          signupOk = false;
+          toast.error(signUpErr.message || "Failed to create account");
         }
       }
 
-      toast.success("Account created! You can now sign in.");
-      navigate("/login", { state: { redirectToCheckout } });
+      if (signupOk) {
+        toast.success("Account created! Please sign in.");
+        navigate("/login", { state: { redirectToCheckout } });
+      }
     } catch (error: any) {
       toast.error(error.message || "Failed to create account");
     } finally {
