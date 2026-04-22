@@ -132,21 +132,44 @@ export default function Register() {
       // Use a valid-looking TLD so self-hosted Supabase GoTrue accepts it
       const email = `${phoneDigits}@iobuilds.app`;
 
-      const { error } = await supabase.auth.signUp({
-        email,
-        password: formData.password,
-        options: {
-          emailRedirectTo: window.location.origin,
-          data: {
-            first_name: formData.firstName,
-            last_name: formData.lastName,
-            phone: phone,
-            address: formData.address,
+      try {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password: formData.password,
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: {
+              first_name: formData.firstName,
+              last_name: formData.lastName,
+              phone: phone,
+              address: formData.address,
+            },
           },
-        },
-      });
-
-      if (error) throw error;
+        });
+        if (error) throw error;
+      } catch (signUpErr: any) {
+        const msg = (signUpErr?.message || "").toLowerCase();
+        // Preview proxy sometimes returns "Failed to fetch" even though
+        // the user was actually created on the server. Verify by trying
+        // to sign in — if that works, treat signup as success.
+        if (msg.includes("failed to fetch") || msg.includes("networkerror")) {
+          const { error: signInErr } = await supabase.auth.signInWithPassword({
+            email,
+            password: formData.password,
+          });
+          if (!signInErr) {
+            await supabase.auth.signOut();
+          } else if (!signInErr.message.toLowerCase().includes("invalid")) {
+            throw signUpErr;
+          }
+          // If invalid credentials -> account really wasn't created, rethrow
+          if (signInErr && signInErr.message.toLowerCase().includes("invalid")) {
+            throw signUpErr;
+          }
+        } else {
+          throw signUpErr;
+        }
+      }
 
       toast.success("Account created! You can now sign in.");
       navigate("/login", { state: { redirectToCheckout } });
