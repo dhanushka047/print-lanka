@@ -1,18 +1,24 @@
 -- ============================================================
 -- SELF-HOSTED VPS FIX: "Database error saving new user"
--- Run this in your self-hosted Supabase SQL editor
+-- Run this ENTIRE script in your self-hosted Supabase SQL editor
 -- ============================================================
 
--- 1. Ensure profiles table has all required columns
+-- 1. Ensure profiles has all needed columns
 ALTER TABLE public.profiles
   ADD COLUMN IF NOT EXISTS email TEXT,
   ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN DEFAULT false;
 
--- Make address nullable-safe (trigger passes '' default)
-ALTER TABLE public.profiles ALTER COLUMN address DROP NOT NULL;
-ALTER TABLE public.profiles ALTER COLUMN address SET DEFAULT '';
+-- 2. Relax NOT NULLs so trigger never fails on missing metadata
+ALTER TABLE public.profiles ALTER COLUMN first_name SET DEFAULT '';
+ALTER TABLE public.profiles ALTER COLUMN last_name  SET DEFAULT '';
+ALTER TABLE public.profiles ALTER COLUMN phone      SET DEFAULT '';
+ALTER TABLE public.profiles ALTER COLUMN address    SET DEFAULT '';
+ALTER TABLE public.profiles ALTER COLUMN first_name DROP NOT NULL;
+ALTER TABLE public.profiles ALTER COLUMN last_name  DROP NOT NULL;
+ALTER TABLE public.profiles ALTER COLUMN phone      DROP NOT NULL;
+ALTER TABLE public.profiles ALTER COLUMN address    DROP NOT NULL;
 
--- 2. Recreate the trigger function (matches current schema)
+-- 3. Recreate trigger function (safe / never blocks signup)
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -37,18 +43,23 @@ BEGIN
 
   RETURN NEW;
 EXCEPTION WHEN OTHERS THEN
-  -- Don't block signup if profile insert fails
   RAISE WARNING 'handle_new_user failed: %', SQLERRM;
   RETURN NEW;
 END;
 $$;
 
--- 3. Attach trigger to auth.users (THIS IS USUALLY MISSING ON SELF-HOSTED)
+-- 4. CRITICAL: attach trigger to auth.users
+--    (this is what's missing on VPS — Lovable's hosted runner cannot create
+--    triggers on auth.users, so you MUST run this on your self-hosted DB)
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_new_user();
 
--- 4. Reload PostgREST schema cache
+-- 5. Reload PostgREST schema cache
 NOTIFY pgrst, 'reload schema';
+
+-- 6. Verify
+SELECT trigger_name FROM information_schema.triggers
+WHERE event_object_schema='auth' AND event_object_table='users';
