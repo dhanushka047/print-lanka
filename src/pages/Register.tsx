@@ -129,7 +129,8 @@ export default function Register() {
 
     try {
       const phoneDigits = phone.replace(/[^0-9]/g, "");
-      const email = `${phoneDigits}@iobuilds.local`;
+      // Use a valid-looking TLD so self-hosted Supabase GoTrue accepts it
+      const email = `${phoneDigits}@iobuilds.app`;
 
       const { error } = await supabase.auth.signUp({
         email,
