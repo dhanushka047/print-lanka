@@ -34,14 +34,26 @@ export default function Login() {
     try {
       // Format phone as email for Supabase auth
       const phoneDigits = phone.replace(/[^0-9]/g, "");
-      const email = `${phoneDigits}@iobuilds.local`;
-      
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
 
-      if (error) throw error;
+      // Try the new domain first (.app), then fall back to legacy (.local)
+      // for accounts created before the self-hosted compatibility fix.
+      const candidates = [
+        `${phoneDigits}@iobuilds.app`,
+        `${phoneDigits}@iobuilds.local`,
+      ];
+
+      let lastError: any = null;
+      let signedIn = false;
+      for (const email of candidates) {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (!error) {
+          signedIn = true;
+          break;
+        }
+        lastError = error;
+      }
+
+      if (!signedIn) throw lastError;
 
       toast.success("Welcome back!");
       navigate(redirectToCheckout ? "/checkout" : "/dashboard");
