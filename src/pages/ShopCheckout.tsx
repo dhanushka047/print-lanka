@@ -222,9 +222,23 @@ export default function ShopCheckout() {
       });
 
       navigate("/dashboard?tab=shop-orders");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Order error:", error);
-      toast({ title: "Error", description: "Failed to place order. Please try again.", variant: "destructive" });
+      // Roll back uploaded slip if order failed
+      if (uploadedSlipPath) {
+        try { await supabase.storage.from("payment-slips").remove([uploadedSlipPath]); } catch {}
+      }
+      const raw = (error?.message || "").toString();
+      const lower = raw.toLowerCase();
+      let friendly = raw || "Failed to place order. Please try again.";
+      if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("network request failed")) {
+        friendly = "Server is offline or unreachable. Your order was NOT placed. Please check your connection.";
+      } else if (lower.includes("payload too large") || lower.includes("413")) {
+        friendly = "Payment slip file is too large. Please upload a smaller file.";
+      } else if (lower.includes("permission") || lower.includes("rls")) {
+        friendly = "You are not authorized to place this order. Please log in again.";
+      }
+      toast({ title: "Error", description: friendly, variant: "destructive" });
     } finally {
       setIsSubmitting(false);
     }
