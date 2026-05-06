@@ -106,15 +106,35 @@ export default function ShopCheckout() {
       return;
     }
 
-    if (!paymentSlip) {
+    if (!paymentSlip || paymentSlip.size === 0) {
       toast({ title: "Payment slip required", description: "Please upload your bank transfer payment slip to place order", variant: "destructive" });
       return;
     }
 
     setIsSubmitting(true);
 
+    let uploadedSlipPath: string | null = null;
+
     try {
-      // 1. Create the order
+      // STEP 1: Upload payment slip FIRST. Order is only created if upload succeeds.
+      // This prevents empty/slip-less orders on the VPS when storage upload fails.
+      const fileExt = paymentSlip.name.split(".").pop();
+      const tempPath = `${user.id}/pending_${Date.now()}.${fileExt}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("payment-slips")
+        .upload(tempPath, paymentSlip, { upsert: false });
+
+      if (uploadError) {
+        const m = (uploadError.message || "").toLowerCase();
+        if (m.includes("failed to fetch") || m.includes("networkerror")) {
+          throw new Error("Server is offline. Could not upload payment slip. Please try again.");
+        }
+        throw new Error(`Failed to upload payment slip: ${uploadError.message}`);
+      }
+      uploadedSlipPath = tempPath;
+
+      // STEP 2: Create the order
       const { data: order, error: orderError } = await supabase
         .from("shop_orders")
         .insert({
@@ -130,9 +150,9 @@ export default function ShopCheckout() {
         .select()
         .single();
 
-      if (orderError) throw orderError;
+      if (orderError) throw new Error(`Failed to create order: ${orderError.message}`);
 
-      // 2. Create order items
+      // 3. Create order items
       const orderItems = cartItems.map((item) => ({
         order_id: order.id,
         product_id: item.product_id,
@@ -145,29 +165,19 @@ export default function ShopCheckout() {
         .from("shop_order_items")
         .insert(orderItems);
 
-      if (itemsError) throw itemsError;
+      if (itemsError) throw new Error(`Failed to save order items: ${itemsError.message}`);
 
-      // 3. Upload payment slip
-      const fileExt = paymentSlip.name.split(".").pop();
-      const filePath = `${user.id}/${order.id}/${Date.now()}.${fileExt}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("payment-slips")
-        .upload(filePath, paymentSlip);
-
-      if (uploadError) throw uploadError;
-
-      // 4. Create payment slip record
+      // 4. Create payment slip record (file already uploaded)
       const { error: slipError } = await supabase
         .from("shop_payment_slips")
         .insert({
           order_id: order.id,
           user_id: user.id,
-          file_path: filePath,
+          file_path: uploadedSlipPath,
           file_name: paymentSlip.name,
         });
 
-      if (slipError) throw slipError;
+      if (slipError) throw new Error(`Failed to save payment slip record: ${slipError.message}`);
 
       // 5. Clear cart
       await supabase
