@@ -149,14 +149,51 @@ export default function Register() {
         });
         if (error) throw error;
       } catch (signUpErr: any) {
-        const msg = (signUpErr?.message || "").toLowerCase();
-        // Preview proxy sometimes returns "Failed to fetch" even though
-        // the user was actually created. Treat as success and redirect.
-        if (msg.includes("failed to fetch") || msg.includes("networkerror")) {
-          signupOk = true;
+        const raw = (signUpErr?.message || "").toString();
+        const msg = raw.toLowerCase();
+
+        // Network / proxy issue: try a silent sign-in to detect if account exists
+        if (msg.includes("failed to fetch") || msg.includes("networkerror") || msg.includes("network request failed")) {
+          try {
+            const { error: probeErr } = await supabase.auth.signInWithPassword({
+              email,
+              password: formData.password,
+            });
+            if (!probeErr) {
+              await supabase.auth.signOut();
+              signupOk = true;
+            } else {
+              signupOk = false;
+              toast.error("Server is offline or unreachable. Please check your connection and try again.");
+            }
+          } catch {
+            signupOk = false;
+            toast.error("Server is offline or unreachable. Please check your connection and try again.");
+          }
+        } else if (
+          msg.includes("user already registered") ||
+          msg.includes("already registered") ||
+          msg.includes("already exists") ||
+          msg.includes("duplicate") ||
+          msg.includes("user_already_exists")
+        ) {
+          signupOk = false;
+          toast.error("This phone number is already registered. Please sign in instead.");
+        } else if (msg.includes("password") && (msg.includes("short") || msg.includes("weak") || msg.includes("6"))) {
+          signupOk = false;
+          toast.error("Password is too weak. Use at least 6 characters.");
+        } else if (msg.includes("invalid") && msg.includes("email")) {
+          signupOk = false;
+          toast.error("Invalid phone number format. Please go back and re-enter.");
+        } else if (msg.includes("rate") || msg.includes("too many")) {
+          signupOk = false;
+          toast.error("Too many attempts. Please wait a moment and try again.");
+        } else if (msg.includes("503") || msg.includes("502") || msg.includes("504") || msg.includes("unavailable")) {
+          signupOk = false;
+          toast.error("Server is temporarily unavailable. Please try again in a few moments.");
         } else {
           signupOk = false;
-          toast.error(signUpErr.message || "Failed to create account");
+          toast.error(raw || "Failed to create account");
         }
       }
 

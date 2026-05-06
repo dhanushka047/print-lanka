@@ -179,10 +179,50 @@ export default function Checkout() {
   const handleSubmitOrder = async () => {
     if (!user || models.length === 0) return;
 
+    // Validate all files exist before doing anything
+    for (let i = 0; i < models.length; i++) {
+      if (!models[i].file || models[i].file.size === 0) {
+        toast.error(`Model "${models[i].name}" file is missing or empty. Please re-upload.`);
+        return;
+      }
+    }
+
     setIsSubmitting(true);
 
     try {
-      // 1. Create the order with expected delivery date
+      // STEP 1: Upload ALL files to storage FIRST. Only proceed to create order
+      // if every file uploaded successfully. This prevents empty orders on the VPS
+      // when storage upload silently fails.
+      const tempOrderRef = `${user.id}/pending_${Date.now()}`;
+      const uploadedPaths: { path: string; model: typeof models[0] }[] = [];
+
+      for (let i = 0; i < models.length; i++) {
+        const model = models[i];
+        setUploadProgress((prev) => ({ ...prev, [i]: 0 }));
+
+        const filePath = `${tempOrderRef}/${i}_${Date.now()}_${model.file.name}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("models")
+          .upload(filePath, model.file, { upsert: false });
+
+        if (uploadError) {
+          // Clean up any already-uploaded files
+          if (uploadedPaths.length > 0) {
+            await supabase.storage.from("models").remove(uploadedPaths.map(u => u.path));
+          }
+          const msg = uploadError.message || "Unknown error";
+          if (msg.toLowerCase().includes("failed to fetch") || msg.toLowerCase().includes("networkerror")) {
+            throw new Error(`Server offline or network error while uploading "${model.name}". Please check your connection and try again.`);
+          }
+          throw new Error(`Failed to upload "${model.name}": ${msg}`);
+        }
+
+        uploadedPaths.push({ path: filePath, model });
+        setUploadProgress((prev) => ({ ...prev, [i]: 100 }));
+      }
+
+      // STEP 2: Now that all files are uploaded, create the order
       const { data: order, error: orderError } = await supabase
         .from("orders")
         .insert({
@@ -196,41 +236,29 @@ export default function Checkout() {
         .select()
         .single();
 
-      if (orderError) throw orderError;
+      if (orderError) {
+        // Clean up uploaded files since the order failed
+        await supabase.storage.from("models").remove(uploadedPaths.map(u => u.path));
+        throw new Error(`Failed to create order: ${orderError.message}`);
+      }
 
-      // 2. Upload files and create order items
-      for (let i = 0; i < models.length; i++) {
-        const model = models[i];
-        setUploadProgress((prev) => ({ ...prev, [i]: 0 }));
+      // STEP 3: Create order items referencing the uploaded file paths
+      const items = uploadedPaths.map(({ path, model }) => ({
+        order_id: order.id,
+        file_name: model.file.name,
+        file_path: path,
+        file_size: model.file.size,
+        material: model.config.material as any,
+        quality: model.config.quality as any,
+        color: model.config.color,
+        infill_percentage: model.config.infill,
+        quantity: model.config.quantity,
+        notes: model.config.notes || null,
+      }));
 
-        // Upload file to storage
-        const filePath = `${user.id}/${order.id}/${Date.now()}_${model.file.name}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from("models")
-          .upload(filePath, model.file);
-
-        if (uploadError) throw uploadError;
-
-        setUploadProgress((prev) => ({ ...prev, [i]: 50 }));
-
-        // Create order item
-        const { error: itemError } = await supabase.from("order_items").insert({
-          order_id: order.id,
-          file_name: model.file.name,
-          file_path: filePath,
-          file_size: model.file.size,
-          material: model.config.material as any,
-          quality: model.config.quality as any,
-          color: model.config.color,
-          infill_percentage: model.config.infill,
-          quantity: model.config.quantity,
-          notes: model.config.notes || null,
-        });
-
-        if (itemError) throw itemError;
-
-        setUploadProgress((prev) => ({ ...prev, [i]: 100 }));
+      const { error: itemsError } = await supabase.from("order_items").insert(items);
+      if (itemsError) {
+        throw new Error(`Failed to save order items: ${itemsError.message}`);
       }
 
       // 3. Mark coupon as used if applicable
@@ -269,7 +297,17 @@ export default function Checkout() {
       toast.success("Order submitted successfully!");
     } catch (error: any) {
       console.error("Order submission error:", error);
-      toast.error(error.message || "Failed to submit order");
+      const raw = (error?.message || "").toString();
+      const lower = raw.toLowerCase();
+      let friendly = raw || "Failed to submit order";
+      if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("network request failed")) {
+        friendly = "Server is offline or unreachable. Your order was NOT submitted. Please check your internet and try again.";
+      } else if (lower.includes("payload too large") || lower.includes("413")) {
+        friendly = "One of your model files is too large to upload. Please use a smaller file.";
+      } else if (lower.includes("permission") || lower.includes("rls") || lower.includes("not authorized")) {
+        friendly = "You are not authorized to submit this order. Please log in again.";
+      }
+      toast.error(friendly);
     } finally {
       setIsSubmitting(false);
     }
