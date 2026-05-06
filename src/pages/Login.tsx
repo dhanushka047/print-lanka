@@ -58,7 +58,21 @@ export default function Login() {
       toast.success("Welcome back!");
       navigate(redirectToCheckout ? "/checkout" : "/dashboard");
     } catch (error: any) {
-      toast.error(error.message || "Failed to sign in");
+      const raw = (error?.message || "").toString();
+      const lower = raw.toLowerCase();
+      if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("network request failed")) {
+        toast.error("Server is offline or unreachable. Please check your connection and try again.");
+      } else if (lower.includes("invalid login") || lower.includes("invalid credentials") || lower.includes("invalid_grant")) {
+        toast.error("Incorrect phone number or password.");
+      } else if (lower.includes("email not confirmed")) {
+        toast.error("Account not confirmed yet. Please contact support.");
+      } else if (lower.includes("rate") || lower.includes("too many")) {
+        toast.error("Too many login attempts. Please wait and try again.");
+      } else if (lower.includes("503") || lower.includes("502") || lower.includes("504") || lower.includes("unavailable")) {
+        toast.error("Server is temporarily unavailable. Please try again shortly.");
+      } else {
+        toast.error(raw || "Failed to sign in");
+      }
     } finally {
       setIsLoading(false);
     }
