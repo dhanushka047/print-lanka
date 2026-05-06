@@ -72,7 +72,19 @@ export default function Register() {
       setStep('otp');
       setCountdown(60); // 60 second cooldown for resend
     } catch (error: any) {
-      toast.error(error.message || "Failed to send OTP");
+      const raw = (error?.message || "").toString();
+      const lower = raw.toLowerCase();
+      if (lower.includes("failed to fetch") || lower.includes("networkerror")) {
+        toast.error("Server is offline. Cannot send OTP right now.");
+      } else if (lower.includes("already registered") || lower.includes("already exists")) {
+        toast.error("This phone number is already registered. Please sign in instead.");
+      } else if (lower.includes("rate") || lower.includes("too many")) {
+        toast.error("Too many OTP requests. Please wait a minute and try again.");
+      } else if (lower.includes("invalid") && lower.includes("phone")) {
+        toast.error("Invalid phone number. Please enter a valid Sri Lankan number.");
+      } else {
+        toast.error(raw || "Failed to send OTP");
+      }
     } finally {
       setIsSendingOtp(false);
     }
@@ -101,7 +113,17 @@ export default function Register() {
         setStep('details');
       }, 1000);
     } catch (error: any) {
-      toast.error(error.message || "Failed to verify OTP");
+      const raw = (error?.message || "").toString();
+      const lower = raw.toLowerCase();
+      if (lower.includes("failed to fetch") || lower.includes("networkerror")) {
+        toast.error("Server is offline. Cannot verify code right now.");
+      } else if (lower.includes("expired")) {
+        toast.error("This code has expired. Please request a new one.");
+      } else if (lower.includes("invalid") || lower.includes("incorrect") || lower.includes("not match")) {
+        toast.error("Incorrect code. Please check and try again.");
+      } else {
+        toast.error(raw || "Failed to verify OTP");
+      }
       setOtpCode("");
     } finally {
       setIsVerifying(false);
