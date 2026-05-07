@@ -883,6 +883,13 @@ export default function AdminOrders() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={filteredOrders.length > 0 && selectedIds.size === filteredOrders.length}
+                      onCheckedChange={toggleSelectAll}
+                      aria-label="Select all"
+                    />
+                  </TableHead>
                   <TableHead className="w-10"></TableHead>
                   <TableHead>Order ID</TableHead>
                   <TableHead>Customer</TableHead>
