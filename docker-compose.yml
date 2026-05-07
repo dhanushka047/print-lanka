@@ -1,0 +1,33 @@
+# =============================================================================
+# IO Builds — Frontend container
+# =============================================================================
+# This file ONLY builds & runs the React frontend.
+# Supabase runs separately via the official self-hosted compose:
+#   https://supabase.com/docs/guides/self-hosting/docker
+#
+# Usage on VPS:
+#   1) cp .env.example .env   # then edit values
+#   2) docker compose build
+#   3) docker compose up -d
+#   4) Point host Nginx at 127.0.0.1:8080 (see deploy/nginx/host-site.conf.example)
+# =============================================================================
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_SUPABASE_URL:            ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY}
+        VITE_SUPABASE_PROJECT_ID:     ${VITE_SUPABASE_PROJECT_ID:-self-hosted}
+    image: iobuilds-web:latest
+    container_name: iobuilds-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"   # bind to localhost; host Nginx fronts it with TLS
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
