@@ -1096,7 +1096,7 @@ export default function AdminOrders() {
                     </TableRow>
                     {expandedOrder === order.id && (
                       <TableRow className="bg-muted/50">
-                        <TableCell colSpan={10}>
+                        <TableCell colSpan={11}>
                           <div className="p-4 space-y-4">
                             <div className="flex justify-between items-start">
                               <div>
