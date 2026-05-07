@@ -30,7 +30,7 @@ serve(async (req) => {
       console.error('TEXTLK_API_TOKEN not configured');
       return new Response(
         JSON.stringify({ error: 'SMS API token not configured' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
