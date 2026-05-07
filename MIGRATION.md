@@ -789,7 +789,9 @@ WITH CHECK (true);
 
 #### 2. Fix CORS for Storage
 
-Edit your Supabase Kong configuration (`/opt/supabase/docker/volumes/api/kong.yml`):
+If browser console shows `No 'Access-Control-Allow-Origin' header` for `/storage/v1/object/...`, the frontend is OK — the VPS API gateway/proxy is not returning CORS headers for Storage uploads.
+
+Edit your Supabase Kong configuration (`/opt/supabase/docker/volumes/api/kong.yml`) and ensure the CORS plugin applies to Storage/API routes:
 
 ```yaml
 # Add or update CORS plugin for storage
@@ -797,7 +799,8 @@ plugins:
   - name: cors
     config:
       origins:
-        - "*"  # Or your specific domain
+        - "https://3dprint.iobuilds.com"
+        - "https://www.3dprint.iobuilds.com"
       methods:
         - GET
         - POST
@@ -812,8 +815,12 @@ plugins:
         - Content-Length
         - Content-Type
         - X-Client-Info
+        - x-client-info
         - apikey
         - x-upsert
+        - cache-control
+        - prefer
+        - range
       exposed_headers:
         - X-Supabase-Api-Version
       credentials: true
@@ -824,6 +831,39 @@ Restart Kong after changes:
 
 ```bash
 docker compose restart kong
+```
+
+If you also use Nginx in front of Kong, make sure OPTIONS and upload headers pass through:
+
+```nginx
+location /storage/v1/ {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header Host $host;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header apikey $http_apikey;
+    proxy_set_header x-client-info $http_x_client_info;
+    proxy_set_header x-upsert $http_x_upsert;
+
+    client_max_body_size 100M;
+    proxy_request_buffering off;
+    proxy_buffering off;
+
+    if ($request_method = OPTIONS) {
+        add_header Access-Control-Allow-Origin "https://3dprint.iobuilds.com" always;
+        add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "authorization, apikey, content-type, x-client-info, x-upsert, cache-control, prefer, range" always;
+        add_header Access-Control-Max-Age 3600 always;
+        return 204;
+    }
+
+    add_header Access-Control-Allow-Origin "https://3dprint.iobuilds.com" always;
+}
+```
+
+Then reload Nginx:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
 #### 3. Alternative: Direct Storage Restore via CLI
