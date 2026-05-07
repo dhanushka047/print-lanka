@@ -905,7 +905,14 @@ export default function AdminOrders() {
               <TableBody>
                 {filteredOrders.map((order) => (
                   <Fragment key={order.id}>
-                    <TableRow className="hover:bg-muted/50">
+                    <TableRow className="hover:bg-muted/50" data-state={selectedIds.has(order.id) ? "selected" : undefined}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedIds.has(order.id)}
+                          onCheckedChange={() => toggleSelect(order.id)}
+                          aria-label={`Select order ${order.id.slice(0, 8)}`}
+                        />
+                      </TableCell>
                       <TableCell>
                         <Button
                           variant="ghost"
