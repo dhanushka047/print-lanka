@@ -852,10 +852,23 @@ export default function AdminOrders() {
 
       <Card>
         <CardHeader>
-          <CardTitle>
-            {filterStatus === "all" ? "All Orders" : ORDER_STATUSES[filterStatus as keyof typeof ORDER_STATUSES]?.label}
-            <span className="text-muted-foreground font-normal ml-2">({filteredOrders.length})</span>
-          </CardTitle>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <CardTitle>
+              {filterStatus === "all" ? "All Orders" : ORDER_STATUSES[filterStatus as keyof typeof ORDER_STATUSES]?.label}
+              <span className="text-muted-foreground font-normal ml-2">({filteredOrders.length})</span>
+            </CardTitle>
+            {selectedIds.size > 0 && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setBulkDeleteOpen(true)}
+                className="gap-2"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete Selected ({selectedIds.size})
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
