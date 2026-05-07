@@ -213,7 +213,7 @@ export default function Checkout() {
           }
           const msg = uploadError.message || "Unknown error";
           if (msg.toLowerCase().includes("failed to fetch") || msg.toLowerCase().includes("networkerror")) {
-            throw new Error(`Server offline or network error while uploading "${model.name}". Please check your connection and try again.`);
+            throw new Error(`Upload blocked while sending "${model.name}". Your order was NOT submitted. This is usually a storage CORS/server configuration issue on the VPS, or the storage server is unreachable.`);
           }
           throw new Error(`Failed to upload "${model.name}": ${msg}`);
         }
@@ -300,8 +300,10 @@ export default function Checkout() {
       const raw = (error?.message || "").toString();
       const lower = raw.toLowerCase();
       let friendly = raw || "Failed to submit order";
-      if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("network request failed")) {
-        friendly = "Server is offline or unreachable. Your order was NOT submitted. Please check your internet and try again.";
+      if (lower.includes("cors") || lower.includes("upload blocked")) {
+        friendly = "File upload is blocked by the storage server configuration. Your order was NOT submitted. Please contact support or try again after the VPS CORS fix is applied.";
+      } else if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("network request failed")) {
+        friendly = "Storage server is offline, unreachable, or blocking uploads. Your order was NOT submitted. Please try again later.";
       } else if (lower.includes("payload too large") || lower.includes("413")) {
         friendly = "One of your model files is too large to upload. Please use a smaller file.";
       } else if (lower.includes("permission") || lower.includes("rls") || lower.includes("not authorized")) {
