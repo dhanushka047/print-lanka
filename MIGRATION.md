@@ -1156,3 +1156,70 @@ For issues:
 ---
 
 *Last updated: February 2026*
+
+---
+
+## 🚀 Docker Quick Deploy (Frontend)
+
+The repo now ships with everything needed to run the **frontend** in Docker on
+your VPS. Supabase itself runs separately via the official self-hosted compose.
+
+### Files added
+| File | Purpose |
+|------|---------|
+| `Dockerfile` | Multi-stage build (Node 20 build → Nginx serve) |
+| `docker-compose.yml` | Builds & runs the `iobuilds-web` container on `127.0.0.1:8080` |
+| `.dockerignore` | Keeps the build context small |
+| `.env.example` | Template for `VITE_SUPABASE_URL` etc. |
+| `deploy/nginx/app.conf` | Nginx config inside the container (SPA fallback, gzip, caching) |
+| `deploy/nginx/host-site.conf.example` | Host-level Nginx for `3dprint.iobuilds.com` + `db.3dprint.iobuilds.com` (incl. CORS fix) |
+| `deploy/deploy.sh` | One-shot pull + rebuild + restart |
+| `deploy/edge-functions-deploy.sh` | Deploy all edge functions to self-hosted Supabase |
+
+### Steps on the VPS
+
+```bash
+# 1) Clone the repo
+git clone <your-repo-url> iobuilds && cd iobuilds
+
+# 2) Configure env
+cp .env.example .env
+nano .env     # set VITE_SUPABASE_URL=https://db.3dprint.iobuilds.com  + anon key
+
+# 3) Build & run the frontend container
+docker compose build
+docker compose up -d
+# Frontend now listens on 127.0.0.1:8080
+
+# 4) Host Nginx (frontend + Supabase reverse proxy with CORS)
+sudo cp deploy/nginx/host-site.conf.example /etc/nginx/sites-available/iobuilds
+sudo ln -sf /etc/nginx/sites-available/iobuilds /etc/nginx/sites-enabled/iobuilds
+sudo nginx -t && sudo systemctl reload nginx
+
+# 5) SSL
+sudo certbot --nginx -d 3dprint.iobuilds.com -d www.3dprint.iobuilds.com -d db.3dprint.iobuilds.com
+
+# 6) Deploy edge functions to self-hosted Supabase
+supabase login
+supabase link --project-ref <self-hosted-ref>
+supabase secrets set TEXTLK_API_TOKEN=xxxx
+./deploy/edge-functions-deploy.sh
+```
+
+### Future updates
+```bash
+./deploy/deploy.sh
+```
+That's it — pulls latest `main`, rebuilds the image, restarts the container.
+
+### Why this fixes the upload / CORS errors
+The `db.3dprint.iobuilds.com` server block in `host-site.conf.example`:
+
+- Handles `OPTIONS` preflight at the Nginx edge (so Kong never blocks it).
+- Echoes `Access-Control-Allow-Origin` for `3dprint.iobuilds.com` on **every**
+  response (incl. Storage 4xx/5xx).
+- Whitelists the headers Supabase JS sends: `authorization, apikey, x-client-info,
+  content-type, prefer, range, cache-control, x-upsert`.
+- Sets `client_max_body_size 100M` and `proxy_request_buffering off` so STL /
+  payment-slip uploads aren't truncated → no more
+  `net::ERR_BLOCKED_BY_CLIENT` / `net::ERR_FAILED` on the live site.
