@@ -1,144 +1,140 @@
-# 🔧 Self-Hosted Supabase — CORS + 413 Upload Fix
+# Self-Hosted Upload Fix — keeping `db.3dprint.iobuilds.com`
 
-Your errors:
+You want to keep the **separate subdomain** `https://db.3dprint.iobuilds.com` for Supabase.
+Frontend stays as-is (`VITE_SUPABASE_URL=https://db.3dprint.iobuilds.com`). **Do not change the frontend.**
 
-```
-Access to fetch at 'https://db.3dprint.iobuilds.com/storage/v1/object/models/...'
-from origin 'https://3dprint.iobuilds.com' has been blocked by CORS policy:
-No 'Access-Control-Allow-Origin' header is present on the requested resource.
+The upload errors (`ERR_FAILED`, CORS blocked, `ERR_BLOCKED_BY_CLIENT`) come from **3 layers** on the VPS that all need to allow:
+1. Cross-origin requests from `https://3dprint.iobuilds.com`
+2. File uploads up to 100 MB
 
-POST .../storage/v1/object/models/... net::ERR_FAILED 413 (Content Too Large)
-```
-
-Two separate issues. Fix both on the VPS — **no app code change needed.**
+Fix all 3 layers below in order, then restart.
 
 ---
 
-## Fix 1 — CORS on Kong (`volumes/api/kong.yml`)
+## 1. Host Nginx — `db.3dprint.iobuilds.com` server block
 
-Open `~/iobuilds3ddb/volumes/api/kong.yml` and find the **plugins** section (or add one if missing). Add a global CORS plugin:
-
-```yaml
-plugins:
-  - name: cors
-    config:
-      origins:
-        - https://3dprint.iobuilds.com
-        - https://www.3dprint.iobuilds.com
-        - http://localhost:8080
-        - http://localhost:5173
-      methods:
-        - GET
-        - POST
-        - PUT
-        - PATCH
-        - DELETE
-        - OPTIONS
-        - HEAD
-      headers:
-        - Accept
-        - Authorization
-        - Content-Type
-        - apikey
-        - x-client-info
-        - x-supabase-api-version
-        - prefer
-        - range
-        - cache-control
-        - x-upsert
-        - if-match
-        - if-none-match
-      exposed_headers:
-        - Content-Range
-        - Content-Length
-        - X-Upsert
-      credentials: true
-      max_age: 3600
-      preflight_continue: false
-```
-
-If a `cors` plugin already exists, **just add your domains to `origins`** and the missing headers (`prefer`, `range`, `cache-control`, `x-upsert`) to `headers`.
-
----
-
-## Fix 2 — 413 (Content Too Large)
-
-Two layers can reject big uploads: **Kong** and **Storage**. Set both.
-
-### A) Kong body size
-
-In `docker-compose.yml`, under the `kong:` service `environment:`:
-
-```yaml
-  kong:
-    environment:
-      KONG_NGINX_PROXY_CLIENT_MAX_BODY_SIZE: 100m
-      KONG_NGINX_PROXY_CLIENT_BODY_BUFFER_SIZE: 10m
-      KONG_NGINX_PROXY_PROXY_READ_TIMEOUT: 600s
-      KONG_NGINX_PROXY_PROXY_SEND_TIMEOUT: 600s
-```
-
-### B) Storage upload limit
-
-Under the `storage:` service `environment:`:
-
-```yaml
-  storage:
-    environment:
-      FILE_SIZE_LIMIT: '104857600'   # 100 MB in bytes
-      UPLOAD_FILE_SIZE_LIMIT: '104857600'
-      UPLOAD_FILE_SIZE_LIMIT_STANDARD: '104857600'
-```
-
-### C) (Only if you have a host Nginx in front of Kong)
-
-In `/etc/nginx/sites-available/iobuilds` for the `db.3dprint.iobuilds.com` server block:
+Edit `/etc/nginx/sites-available/db.3dprint.iobuilds.com` (or wherever your db vhost lives).
 
 ```nginx
-client_max_body_size 100M;
-proxy_request_buffering off;
-proxy_read_timeout 600s;
-proxy_send_timeout 600s;
+server {
+    listen 80;
+    server_name db.3dprint.iobuilds.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name db.3dprint.iobuilds.com;
+
+    # SSL certs (certbot)
+    ssl_certificate     /etc/letsencrypt/live/db.3dprint.iobuilds.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/db.3dprint.iobuilds.com/privkey.pem;
+
+    # ---- CRITICAL: large uploads ----
+    client_max_body_size 100M;
+    client_body_buffer_size 1M;
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_read_timeout  600s;
+    proxy_send_timeout  600s;
+    send_timeout        600s;
+
+    # ---- CORS at the edge (so even Kong errors carry CORS) ----
+    set $cors_origin "";
+    if ($http_origin ~* ^https://(www\.)?3dprint\.iobuilds\.com$) {
+        set $cors_origin $http_origin;
+    }
+
+    # Preflight short-circuit — never let Kong handle OPTIONS
+    if ($request_method = OPTIONS) {
+        add_header Access-Control-Allow-Origin  $cors_origin       always;
+        add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD" always;
+        add_header Access-Control-Allow-Headers "authorization, x-client-info, apikey, content-type, x-upsert, prefer, range, cache-control, x-supabase-api-version" always;
+        add_header Access-Control-Allow-Credentials "true" always;
+        add_header Access-Control-Max-Age 3600 always;
+        add_header Content-Length 0;
+        add_header Content-Type text/plain;
+        return 204;
+    }
+
+    # Add CORS to every real response (incl. 4xx/5xx from Storage)
+    add_header Access-Control-Allow-Origin  $cors_origin always;
+    add_header Access-Control-Allow-Credentials "true" always;
+    add_header Access-Control-Expose-Headers "content-range, x-total-count" always;
+
+    # WebSockets (realtime)
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade    $http_upgrade;
+    proxy_set_header Connection $http_upgrade;
+    proxy_set_header Host       $host;
+    proxy_set_header X-Real-IP  $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;   # Kong port (adjust if different)
+    }
+}
 ```
 
-Then `sudo nginx -t && sudo systemctl reload nginx`.
+Reload:
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
 
 ---
 
-## Apply the fix
+## 2. Kong (`docker-compose.yml`)
 
-```bash
-cd ~/iobuilds3ddb
-docker compose down
-docker compose up -d
+Under the `kong` service `environment:` add:
+
+```yaml
+KONG_NGINX_PROXY_CLIENT_MAX_BODY_SIZE: 100m
+KONG_NGINX_PROXY_CLIENT_BODY_BUFFER_SIZE: 10m
+KONG_NGINX_PROXY_PROXY_READ_TIMEOUT: 600s
+KONG_NGINX_PROXY_PROXY_SEND_TIMEOUT: 600s
 ```
 
-Verify CORS is alive (run from your laptop):
+---
+
+## 3. Storage (`docker-compose.yml`)
+
+Under the `storage` service `environment:`:
+
+```yaml
+FILE_SIZE_LIMIT: 104857600
+UPLOAD_FILE_SIZE_LIMIT: 104857600
+UPLOAD_FILE_SIZE_LIMIT_STANDARD: 104857600
+```
+
+Also confirm in your Studio → Storage → bucket `models` that **File size limit** is ≥ 100 MB (per-bucket setting overrides global).
+
+---
+
+## 4. Apply
 
 ```bash
-curl -i -X OPTIONS https://db.3dprint.iobuilds.com/storage/v1/object/models/test \
+cd /path/to/supabase
+docker compose up -d kong storage
+docker compose restart kong storage
+```
+
+---
+
+## 5. Verify
+
+```bash
+# Should print: access-control-allow-origin: https://3dprint.iobuilds.com
+curl -I -X OPTIONS https://db.3dprint.iobuilds.com/storage/v1/object/models/test \
   -H "Origin: https://3dprint.iobuilds.com" \
-  -H "Access-Control-Request-Method: POST" \
-  -H "Access-Control-Request-Headers: authorization,apikey,content-type,x-upsert"
+  -H "Access-Control-Request-Method: POST"
 ```
 
-Expected response headers:
-
-```
-HTTP/2 204
-access-control-allow-origin: https://3dprint.iobuilds.com
-access-control-allow-methods: GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD
-access-control-allow-headers: ...content-type, x-upsert, ...
-access-control-allow-credentials: true
-```
-
-If you get those headers back → reload the frontend, re-upload the STL — both errors will be gone.
+If you see `access-control-allow-origin` echoed → CORS is fixed.
+Then try a real upload from the site. If it still 413s → the **bucket** size limit is the cap (fix in Studio).
 
 ---
 
-## Common gotchas
+## About `ERR_BLOCKED_BY_CLIENT`
 
-- **`origins: ["*"]` does NOT work with `credentials: true`.** You must list each origin explicitly. That's the #1 reason Kong CORS silently fails.
-- After editing `kong.yml`, you **must** restart the kong container (`docker compose restart kong`) — Kong only reads it on startup.
-- If you still see 413 after raising Kong limits, the **storage** container is rejecting it. Check `docker logs supabase-storage | tail -50`.
-- If you see `ERR_BLOCKED_BY_CLIENT` in DevTools, that's also an **ad-blocker** flagging the URL pattern (the `cloudflareinsights.com` line in your screenshot is just that — harmless).
+That's **your browser's ad-blocker** (uBlock/Brave) blocking the request because the URL matches a tracking-like pattern (`pending_…`). Test in **Incognito with extensions disabled** — it will go through.
