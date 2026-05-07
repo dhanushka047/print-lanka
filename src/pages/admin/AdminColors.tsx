@@ -96,6 +96,40 @@ export default function AdminColors() {
     }
   };
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === colors.length && colors.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(colors.map(c => c.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setIsBulkDeleting(true);
+    try {
+      const { error } = await supabase.from("available_colors").delete().in("id", ids);
+      if (error) throw error;
+      toast.success(`Deleted ${ids.length} color${ids.length > 1 ? "s" : ""}`);
+      setSelectedIds(new Set());
+      setBulkDeleteOpen(false);
+      fetchColors();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to delete colors");
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
