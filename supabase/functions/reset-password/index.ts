@@ -29,14 +29,14 @@ serve(async (req) => {
     if (!phone || !new_password || !session_id) {
       return new Response(
         JSON.stringify({ error: 'Phone, new password, and session ID are required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     if (new_password.length < 6) {
       return new Response(
         JSON.stringify({ error: 'Password must be at least 6 characters' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -75,7 +75,7 @@ serve(async (req) => {
       console.log(`No valid session found for ID: ${session_id}`);
       return new Response(
         JSON.stringify({ error: 'Invalid or expired session. Please verify your phone again.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -89,7 +89,7 @@ serve(async (req) => {
       await supabase.from('otp_sessions').delete().eq('id', session.id);
       return new Response(
         JSON.stringify({ error: 'Session expired. Please verify your phone again.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -113,7 +113,7 @@ serve(async (req) => {
       console.log(`No profile found for phone: ${sessionPhone}`);
       return new Response(
         JSON.stringify({ error: 'User not found' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 

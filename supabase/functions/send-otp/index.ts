@@ -26,7 +26,7 @@ serve(async (req) => {
     if (!apiToken) {
       return new Response(
         JSON.stringify({ error: 'SMS API token not configured' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -35,7 +35,7 @@ serve(async (req) => {
     if (!phone) {
       return new Response(
         JSON.stringify({ error: 'Phone number is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -66,7 +66,7 @@ serve(async (req) => {
         console.log(`No account found for phone: ${formattedPhone}`);
         return new Response(
           JSON.stringify({ error: 'No account found with this phone number' }),
-          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
       console.log(`Found profile for forgot password: ${profiles[0].id}`);
@@ -84,7 +84,7 @@ serve(async (req) => {
         console.log(`Phone already registered: ${formattedPhone}`);
         return new Response(
           JSON.stringify({ error: 'This phone number is already registered' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
     }

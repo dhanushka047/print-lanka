@@ -30,7 +30,7 @@ serve(async (req) => {
     if (!phone || !providedOtp) {
       return new Response(
         JSON.stringify({ error: 'Phone and OTP code are required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -71,7 +71,7 @@ serve(async (req) => {
       console.log(`No pending OTP found for ${formattedPhone}`);
       return new Response(
         JSON.stringify({ error: 'No pending OTP found. Please request a new code.' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -80,7 +80,7 @@ serve(async (req) => {
       await supabase.from('otp_sessions').delete().eq('id', session.id);
       return new Response(
         JSON.stringify({ error: 'OTP has expired. Please request a new code.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -89,7 +89,7 @@ serve(async (req) => {
       await supabase.from('otp_sessions').delete().eq('id', session.id);
       return new Response(
         JSON.stringify({ error: 'Too many attempts. Please request a new code.' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
@@ -107,7 +107,7 @@ serve(async (req) => {
           error: `Invalid OTP. ${remainingAttempts} attempts remaining.`,
           remaining_attempts: remainingAttempts 
         }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
