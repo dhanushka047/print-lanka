@@ -128,7 +128,7 @@ export default function ShopCheckout() {
       if (uploadError) {
         const m = (uploadError.message || "").toLowerCase();
         if (m.includes("failed to fetch") || m.includes("networkerror")) {
-          throw new Error("Server is offline. Could not upload payment slip. Please try again.");
+          throw new Error("Payment slip upload is blocked or the storage server is unreachable. Your order was NOT placed. This is usually a storage CORS/server configuration issue on the VPS.");
         }
         throw new Error(`Failed to upload payment slip: ${uploadError.message}`);
       }
@@ -231,8 +231,10 @@ export default function ShopCheckout() {
       const raw = (error?.message || "").toString();
       const lower = raw.toLowerCase();
       let friendly = raw || "Failed to place order. Please try again.";
-      if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("network request failed")) {
-        friendly = "Server is offline or unreachable. Your order was NOT placed. Please check your connection.";
+      if (lower.includes("cors") || lower.includes("upload is blocked")) {
+        friendly = "Payment slip upload is blocked by the storage server configuration. Your order was NOT placed. Please contact support or try again after the VPS CORS fix is applied.";
+      } else if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("network request failed")) {
+        friendly = "Storage server is offline, unreachable, or blocking uploads. Your order was NOT placed. Please try again later.";
       } else if (lower.includes("payload too large") || lower.includes("413")) {
         friendly = "Payment slip file is too large. Please upload a smaller file.";
       } else if (lower.includes("permission") || lower.includes("rls")) {
