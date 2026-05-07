@@ -186,8 +186,35 @@ export default function AdminColors() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Available Colors</CardTitle>
-          <CardDescription>Colors that customers can choose for their prints</CardDescription>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <CardTitle>Available Colors</CardTitle>
+              <CardDescription>Colors that customers can choose for their prints</CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              {colors.length > 0 && (
+                <div className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={selectedIds.size === colors.length && colors.length > 0}
+                    onCheckedChange={toggleSelectAll}
+                    aria-label="Select all colors"
+                  />
+                  <span className="text-muted-foreground">Select all</span>
+                </div>
+              )}
+              {selectedIds.size > 0 && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setBulkDeleteOpen(true)}
+                  className="gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete ({selectedIds.size})
+                </Button>
+              )}
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -203,6 +230,11 @@ export default function AdminColors() {
                   key={color.id}
                   className="flex items-center gap-4 p-3 rounded-lg border bg-card hover:bg-secondary/50 transition-colors"
                 >
+                  <Checkbox
+                    checked={selectedIds.has(color.id)}
+                    onCheckedChange={() => toggleSelect(color.id)}
+                    aria-label={`Select ${color.name}`}
+                  />
                   <GripVertical className="w-5 h-5 text-muted-foreground cursor-grab" />
                   <div
                     className="w-10 h-10 rounded-lg border-2 border-border shadow-inner"
@@ -230,6 +262,32 @@ export default function AdminColors() {
           )}
         </CardContent>
       </Card>
+
+      {/* Bulk Delete Confirmation */}
+      <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              Delete {selectedIds.size} Color{selectedIds.size > 1 ? "s" : ""}
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete the selected color{selectedIds.size > 1 ? "s" : ""}? This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkDeleteOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleBulkDelete} disabled={isBulkDeleting}>
+              {isBulkDeleting ? (
+                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              ) : (
+                <Trash2 className="w-4 h-4 mr-2" />
+              )}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
