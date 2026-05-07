@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Plus, Loader2, Trash2, GripVertical } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Plus, Loader2, Trash2, GripVertical, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 interface Color {
@@ -23,6 +24,9 @@ export default function AdminColors() {
   const [isCreating, setIsCreating] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newColor, setNewColor] = useState({ name: "", hex_value: "#3b82f6" });
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   useEffect(() => {
     fetchColors();
@@ -92,6 +96,40 @@ export default function AdminColors() {
     }
   };
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === colors.length && colors.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(colors.map(c => c.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setIsBulkDeleting(true);
+    try {
+      const { error } = await supabase.from("available_colors").delete().in("id", ids);
+      if (error) throw error;
+      toast.success(`Deleted ${ids.length} color${ids.length > 1 ? "s" : ""}`);
+      setSelectedIds(new Set());
+      setBulkDeleteOpen(false);
+      fetchColors();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to delete colors");
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -148,8 +186,35 @@ export default function AdminColors() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Available Colors</CardTitle>
-          <CardDescription>Colors that customers can choose for their prints</CardDescription>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <CardTitle>Available Colors</CardTitle>
+              <CardDescription>Colors that customers can choose for their prints</CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              {colors.length > 0 && (
+                <div className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={selectedIds.size === colors.length && colors.length > 0}
+                    onCheckedChange={toggleSelectAll}
+                    aria-label="Select all colors"
+                  />
+                  <span className="text-muted-foreground">Select all</span>
+                </div>
+              )}
+              {selectedIds.size > 0 && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setBulkDeleteOpen(true)}
+                  className="gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete ({selectedIds.size})
+                </Button>
+              )}
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -165,6 +230,11 @@ export default function AdminColors() {
                   key={color.id}
                   className="flex items-center gap-4 p-3 rounded-lg border bg-card hover:bg-secondary/50 transition-colors"
                 >
+                  <Checkbox
+                    checked={selectedIds.has(color.id)}
+                    onCheckedChange={() => toggleSelect(color.id)}
+                    aria-label={`Select ${color.name}`}
+                  />
                   <GripVertical className="w-5 h-5 text-muted-foreground cursor-grab" />
                   <div
                     className="w-10 h-10 rounded-lg border-2 border-border shadow-inner"
@@ -192,6 +262,32 @@ export default function AdminColors() {
           )}
         </CardContent>
       </Card>
+
+      {/* Bulk Delete Confirmation */}
+      <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              Delete {selectedIds.size} Color{selectedIds.size > 1 ? "s" : ""}
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete the selected color{selectedIds.size > 1 ? "s" : ""}? This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkDeleteOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleBulkDelete} disabled={isBulkDeleting}>
+              {isBulkDeleting ? (
+                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              ) : (
+                <Trash2 className="w-4 h-4 mr-2" />
+              )}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

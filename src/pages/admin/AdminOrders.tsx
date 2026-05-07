@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
 import { 
   Loader2, ChevronDown, ChevronUp, DollarSign, Send, FileImage, 
   Search, Download, Eye, RefreshCw, Bell, MapPin, Phone, Mail,
@@ -117,6 +118,11 @@ export default function AdminOrders() {
   // Delete order dialog state
   const [deleteDialog, setDeleteDialog] = useState<Order | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Bulk selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   useEffect(() => {
     fetchOrders();
@@ -527,6 +533,42 @@ export default function AdminOrders() {
     }
   };
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredOrders.length && filteredOrders.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredOrders.map(o => o.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setIsBulkDeleting(true);
+    try {
+      await supabase.from("order_items").delete().in("order_id", ids);
+      await supabase.from("payment_slips").delete().in("order_id", ids);
+      const { error } = await supabase.from("orders").delete().in("id", ids);
+      if (error) throw error;
+      toast.success(`Deleted ${ids.length} order${ids.length > 1 ? "s" : ""}`);
+      setSelectedIds(new Set());
+      setBulkDeleteOpen(false);
+      fetchOrders();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to delete orders");
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
   const openPricingDialog = (order: Order) => {
     setPricingOrder(order);
     const prices: Record<string, number> = {};
@@ -810,10 +852,23 @@ export default function AdminOrders() {
 
       <Card>
         <CardHeader>
-          <CardTitle>
-            {filterStatus === "all" ? "All Orders" : ORDER_STATUSES[filterStatus as keyof typeof ORDER_STATUSES]?.label}
-            <span className="text-muted-foreground font-normal ml-2">({filteredOrders.length})</span>
-          </CardTitle>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <CardTitle>
+              {filterStatus === "all" ? "All Orders" : ORDER_STATUSES[filterStatus as keyof typeof ORDER_STATUSES]?.label}
+              <span className="text-muted-foreground font-normal ml-2">({filteredOrders.length})</span>
+            </CardTitle>
+            {selectedIds.size > 0 && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setBulkDeleteOpen(true)}
+                className="gap-2"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete Selected ({selectedIds.size})
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -828,6 +883,13 @@ export default function AdminOrders() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={filteredOrders.length > 0 && selectedIds.size === filteredOrders.length}
+                      onCheckedChange={toggleSelectAll}
+                      aria-label="Select all"
+                    />
+                  </TableHead>
                   <TableHead className="w-10"></TableHead>
                   <TableHead>Order ID</TableHead>
                   <TableHead>Customer</TableHead>
@@ -843,7 +905,14 @@ export default function AdminOrders() {
               <TableBody>
                 {filteredOrders.map((order) => (
                   <Fragment key={order.id}>
-                    <TableRow className="hover:bg-muted/50">
+                    <TableRow className="hover:bg-muted/50" data-state={selectedIds.has(order.id) ? "selected" : undefined}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedIds.has(order.id)}
+                          onCheckedChange={() => toggleSelect(order.id)}
+                          aria-label={`Select order ${order.id.slice(0, 8)}`}
+                        />
+                      </TableCell>
                       <TableCell>
                         <Button
                           variant="ghost"
@@ -1027,7 +1096,7 @@ export default function AdminOrders() {
                     </TableRow>
                     {expandedOrder === order.id && (
                       <TableRow className="bg-muted/50">
-                        <TableCell colSpan={10}>
+                        <TableCell colSpan={11}>
                           <div className="p-4 space-y-4">
                             <div className="flex justify-between items-start">
                               <div>
@@ -1645,6 +1714,35 @@ export default function AdminOrders() {
                 <Trash2 className="w-4 h-4 mr-2" />
               )}
               Delete Order
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              Delete {selectedIds.size} Order{selectedIds.size > 1 ? "s" : ""}
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete {selectedIds.size} selected order{selectedIds.size > 1 ? "s" : ""}?
+              All related order items and payment slips will also be removed. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleBulkDelete} disabled={isBulkDeleting}>
+              {isBulkDeleting ? (
+                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              ) : (
+                <Trash2 className="w-4 h-4 mr-2" />
+              )}
+              Delete {selectedIds.size} Order{selectedIds.size > 1 ? "s" : ""}
             </Button>
           </DialogFooter>
         </DialogContent>
