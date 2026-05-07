@@ -533,6 +533,41 @@ export default function AdminOrders() {
     }
   };
 
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredOrders.length && filteredOrders.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredOrders.map(o => o.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setIsBulkDeleting(true);
+    try {
+      await supabase.from("order_items").delete().in("order_id", ids);
+      await supabase.from("payment_slips").delete().in("order_id", ids);
+      const { error } = await supabase.from("orders").delete().in("id", ids);
+      if (error) throw error;
+      toast.success(`Deleted ${ids.length} order${ids.length > 1 ? "s" : ""}`);
+      setSelectedIds(new Set());
+      setBulkDeleteOpen(false);
+      fetchOrders();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to delete orders");
+    } finally {
+      setIsBulkDeleting(false);
+    }
+
   const openPricingDialog = (order: Order) => {
     setPricingOrder(order);
     const prices: Record<string, number> = {};
