@@ -119,6 +119,11 @@ export default function AdminOrders() {
   const [deleteDialog, setDeleteDialog] = useState<Order | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Bulk selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+
   useEffect(() => {
     fetchOrders();
     fetchPricingConfig();
