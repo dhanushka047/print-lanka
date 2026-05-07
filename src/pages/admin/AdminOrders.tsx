@@ -567,6 +567,7 @@ export default function AdminOrders() {
     } finally {
       setIsBulkDeleting(false);
     }
+  };
 
   const openPricingDialog = (order: Order) => {
     setPricingOrder(order);
