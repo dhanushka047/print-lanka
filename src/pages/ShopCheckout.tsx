@@ -429,6 +429,15 @@ export default function ShopCheckout() {
                   )}
                 </Button>
 
+                {isSubmitting && uploadProgress > 0 && uploadProgress < 100 && (
+                  <div className="space-y-1">
+                    <Progress value={uploadProgress} />
+                    <p className="text-xs text-center text-muted-foreground">
+                      Uploading payment slip... {uploadProgress}%
+                    </p>
+                  </div>
+                )}
+
                 {!paymentSlip && (
                   <p className="text-xs text-center text-muted-foreground">
                     Upload payment slip to enable order placement
