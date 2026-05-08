@@ -9,6 +9,7 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Progress } from "@/components/ui/progress";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { MATERIALS, QUALITY_PRESETS } from "@/lib/constants";
@@ -95,6 +96,8 @@ export function ModelUploadSection() {
   const [activeModel, setActiveModel] = useState<number>(0);
   const [expandedModels, setExpandedModels] = useState<Set<number>>(new Set([0]));
   const [isLoading, setIsLoading] = useState(false);
+  const [loadProgress, setLoadProgress] = useState(0);
+  const [loadingFileName, setLoadingFileName] = useState<string>("");
   const [availableColors, setAvailableColors] = useState<AvailableColor[]>([]);
   const [userCoupons, setUserCoupons] = useState<UserCoupon[]>([]);
   const [selectedCouponId, setSelectedCouponId] = useState<string | null>(null);
@@ -223,12 +226,32 @@ export function ModelUploadSection() {
     }
 
     setIsLoading(true);
-    
+    setLoadProgress(0);
+    setLoadingFileName(file.name);
+
     try {
-      const arrayBuffer = await file.arrayBuffer();
+      // Read file with progress tracking (0% -> 90%)
+      const arrayBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onprogress = (e) => {
+          if (e.lengthComputable) {
+            setLoadProgress(Math.round((e.loaded / e.total) * 90));
+          }
+        };
+        reader.onload = () => resolve(reader.result as ArrayBuffer);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsArrayBuffer(file);
+      });
+
+      // Parsing phase (90% -> 100%)
+      setLoadProgress(95);
+      // Yield to the browser so the progress UI can paint before the heavy parse
+      await new Promise((r) => setTimeout(r, 30));
       const geometry = parseSTL(arrayBuffer);
+      setLoadProgress(100);
+
       const defaultColor = availableColors.length > 0 ? availableColors[0].hex_value : "#FFFFFF";
-      
+
       const newIndex = uploadedModels.length;
       setUploadedModels(prev => [...prev, {
         file,
@@ -237,13 +260,18 @@ export function ModelUploadSection() {
         config: { ...defaultConfig, color: defaultColor }
       }]);
       setActiveModel(newIndex);
-      
+
       // Collapse all except the new one
       setExpandedModels(new Set([newIndex]));
     } catch (error) {
       console.error("Error parsing model:", error);
     } finally {
-      setIsLoading(false);
+      // Brief delay so users see the 100% state
+      setTimeout(() => {
+        setIsLoading(false);
+        setLoadProgress(0);
+        setLoadingFileName("");
+      }, 250);
     }
   }, [parseSTL, uploadedModels.length, availableColors]);
 
@@ -405,19 +433,33 @@ export function ModelUploadSection() {
                     </div>
                     
                     <h3 className="font-display text-xl font-semibold mb-2">
-                      {isDragging ? "Drop your model here" : "Drag & Drop Your 3D Model"}
+                      {isLoading
+                        ? "Loading model..."
+                        : isDragging
+                        ? "Drop your model here"
+                        : "Drag & Drop Your 3D Model"}
                     </h3>
                     <p className="text-muted-foreground text-sm mb-4">
                       Supports STL, OBJ, and 3MF files up to 100MB
                     </p>
-                    
-                    <Button 
-                      onClick={() => fileInputRef.current?.click()}
-                      className="bg-primary-gradient shadow-glow"
-                    >
-                      <FileUp className="w-4 h-4 mr-2" />
-                      Browse Files
-                    </Button>
+
+                    {isLoading ? (
+                      <div className="w-full max-w-xs space-y-2">
+                        <Progress value={loadProgress} className="h-2" />
+                        <div className="flex justify-between text-xs text-muted-foreground">
+                          <span className="truncate max-w-[180px]">{loadingFileName}</span>
+                          <span>{loadProgress}%</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <Button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="bg-primary-gradient shadow-glow"
+                      >
+                        <FileUp className="w-4 h-4 mr-2" />
+                        Browse Files
+                      </Button>
+                    )}
                   </div>
                 ) : (
                   <div className="flex flex-col">
@@ -426,7 +468,23 @@ export function ModelUploadSection() {
                       {currentModel?.geometry && (
                         <ModelViewer geometry={currentModel.geometry} color={currentModel.config.color} />
                       )}
-                      
+
+                      {isLoading && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 backdrop-blur-sm z-10">
+                          <div className="w-14 h-14 rounded-2xl bg-primary-gradient flex items-center justify-center mb-3 shadow-glow">
+                            <div className="w-6 h-6 border-4 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
+                          </div>
+                          <p className="text-white text-sm font-medium mb-2">Loading model...</p>
+                          <div className="w-64 max-w-[80%] space-y-1.5">
+                            <Progress value={loadProgress} className="h-2" />
+                            <div className="flex justify-between text-xs text-white/70">
+                              <span className="truncate max-w-[180px]">{loadingFileName}</span>
+                              <span>{loadProgress}%</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       <div className="absolute bottom-3 left-3 flex gap-2">
                         <div className="glass-dark px-2 py-1 rounded text-white/70 text-xs flex items-center gap-1">
                           <RotateCcw className="w-3 h-3" /> Drag to rotate
