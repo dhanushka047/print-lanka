@@ -117,7 +117,7 @@ server {
     if ($request_method = OPTIONS) {
         add_header Access-Control-Allow-Origin      $iobuilds_cors_origin always;
         add_header Access-Control-Allow-Methods     "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD" always;
-        add_header Access-Control-Allow-Headers     "authorization, x-client-info, apikey, content-type, x-upsert, prefer, range, cache-control, x-supabase-api-version, range-unit" always;
+        add_header Access-Control-Allow-Headers     "authorization, x-client-info, apikey, content-type, content-profile, accept-profile, x-upsert, prefer, range, cache-control, x-supabase-api-version, range-unit, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version" always;
         add_header Access-Control-Allow-Credentials "true" always;
         add_header Access-Control-Max-Age           3600 always;
         add_header Content-Length 0;
