@@ -1,79 +1,152 @@
 # =============================================================================
-# Host-level Nginx for IO Builds — copy to /etc/nginx/sites-available/iobuilds
-# =============================================================================
-# Two server blocks:
-#   1) 3dprint.iobuilds.com        → frontend (the `web` Docker container on :8080)
-#   2) db.3dprint.iobuilds.com     → Supabase Kong gateway (Docker on :8000)
-#
-# After copying:
-#   sudo ln -s /etc/nginx/sites-available/iobuilds /etc/nginx/sites-enabled/
-#   sudo certbot --nginx -d 3dprint.iobuilds.com -d db.3dprint.iobuilds.com
+# IO Builds 3D Print — Host Nginx config (FULL, project-compatible)
+# Path: /etc/nginx/sites-available/iobuilds
+# Enable:
+#   sudo ln -sf /etc/nginx/sites-available/iobuilds /etc/nginx/sites-enabled/iobuilds
+#   sudo certbot --nginx -d 3dprint.iobuilds.com -d www.3dprint.iobuilds.com -d db.3dprint.iobuilds.com
 #   sudo nginx -t && sudo systemctl reload nginx
+#
+# Assumptions (match this project's docker-compose + Supabase self-host):
+#   - Frontend `web` container bound to 127.0.0.1:8080
+#   - Supabase Kong  bound to 127.0.0.1:8000
+#   - Supabase Studio (optional) bound to 127.0.0.1:3000  -> served from /studio
+#   - SSL certs issued by certbot under /etc/letsencrypt/live/<domain>/
 # =============================================================================
 
-# ---------- 1) Frontend ----------
+# ---------- Shared upload / proxy tuning (one map keeps it DRY) ----------
+# Allow CORS only from the production frontend + localhost dev
+map $http_origin $iobuilds_cors_origin {
+    default                                                  "";
+    "~*^https?://(www\.)?3dprint\.iobuilds\.com$"            $http_origin;
+    "~*^https?://localhost(:[0-9]+)?$"                       $http_origin;
+    "~*^https?://127\.0\.0\.1(:[0-9]+)?$"                    $http_origin;
+}
+
+# =============================================================================
+# 1) FRONTEND  ->  3dprint.iobuilds.com
+# =============================================================================
 server {
     listen 80;
+    listen [::]:80;
     server_name 3dprint.iobuilds.com www.3dprint.iobuilds.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name 3dprint.iobuilds.com www.3dprint.iobuilds.com;
+
+    ssl_certificate     /etc/letsencrypt/live/3dprint.iobuilds.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/3dprint.iobuilds.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    # Large 3D model / payment slip uploads
+    client_max_body_size     100M;
+    client_body_buffer_size  1M;
+    proxy_request_buffering  off;
+    proxy_read_timeout       600s;
+    proxy_send_timeout       600s;
+    send_timeout             600s;
+
+    # Security headers (safe defaults for a React SPA + Supabase)
+    add_header X-Frame-Options          "SAMEORIGIN"          always;
+    add_header X-Content-Type-Options   "nosniff"             always;
+    add_header Referrer-Policy          "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy       "camera=(), microphone=(), geolocation=()" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # Gzip
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript application/xml+rss image/svg+xml;
 
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $http_upgrade;
     }
-
-    client_max_body_size 100M;
 }
 
-# ---------- 2) Supabase (Kong) ----------
-# IMPORTANT: this block fixes the CORS / ERR_BLOCKED_BY_CLIENT issues users hit
-# when uploading 3D models / payment slips from the live frontend.
+# =============================================================================
+# 2) SUPABASE (Kong gateway)  ->  db.3dprint.iobuilds.com
+#    Handles: /auth/v1, /rest/v1, /storage/v1, /realtime/v1, /functions/v1
+# =============================================================================
 server {
     listen 80;
+    listen [::]:80;
+    server_name db.3dprint.iobuilds.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name db.3dprint.iobuilds.com;
 
-    # Allow large file uploads (STL / OBJ / 3MF / payment slips)
-    client_max_body_size 100M;
-    proxy_request_buffering off;
-    proxy_read_timeout 300s;
-    proxy_send_timeout 300s;
+    ssl_certificate     /etc/letsencrypt/live/db.3dprint.iobuilds.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/db.3dprint.iobuilds.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
 
-    # ---- CORS preflight: handle OPTIONS at the edge so Kong never blocks it ----
-    set $cors_origin "";
-    if ($http_origin ~* "^https?://(www\.)?3dprint\.iobuilds\.com$") {
-        set $cors_origin $http_origin;
+    # ---- Large uploads (STL / OBJ / 3MF / payment slips up to 100 MB) ----
+    client_max_body_size     100M;
+    client_body_buffer_size  1M;
+    proxy_request_buffering  off;
+    proxy_buffering          off;
+    proxy_read_timeout       600s;
+    proxy_send_timeout       600s;
+    send_timeout             600s;
+
+    # ---- WebSockets (Supabase Realtime) ----
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade           $http_upgrade;
+    proxy_set_header Connection        $http_upgrade;
+
+    # ---- CORS preflight handled at the edge (never reaches Kong) ----
+    if ($request_method = OPTIONS) {
+        add_header Access-Control-Allow-Origin      $iobuilds_cors_origin always;
+        add_header Access-Control-Allow-Methods     "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD" always;
+        add_header Access-Control-Allow-Headers     "authorization, x-client-info, apikey, content-type, x-upsert, prefer, range, cache-control, x-supabase-api-version, range-unit" always;
+        add_header Access-Control-Allow-Credentials "true" always;
+        add_header Access-Control-Max-Age           3600 always;
+        add_header Content-Length 0;
+        add_header Content-Type   text/plain;
+        return 204;
     }
-    if ($http_origin ~* "^https?://localhost(:[0-9]+)?$") {
-        set $cors_origin $http_origin;
+
+    # ---- Optional: serve Supabase Studio at /studio (basic-auth recommended) ----
+    location /studio/ {
+        # auth_basic           "Restricted";
+        # auth_basic_user_file /etc/nginx/.htpasswd;
+        proxy_pass http://127.0.0.1:3000/;
     }
 
     location / {
-        if ($request_method = OPTIONS) {
-            add_header Access-Control-Allow-Origin  "$cors_origin" always;
-            add_header Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS" always;
-            add_header Access-Control-Allow-Headers "authorization, x-client-info, apikey, content-type, x-supabase-api-version, prefer, range, cache-control, x-upsert" always;
-            add_header Access-Control-Allow-Credentials "true" always;
-            add_header Access-Control-Max-Age "86400" always;
-            add_header Content-Length 0;
-            add_header Content-Type "text/plain";
-            return 204;
-        }
+        proxy_pass http://127.0.0.1:8000;   # Kong
 
-        # Always echo CORS on actual responses too (covers Storage 4xx/5xx)
-        add_header Access-Control-Allow-Origin  "$cors_origin" always;
+        # 🔑 Strip CORS headers Kong/GoTrue add (otherwise we get duplicate
+        # "Access-Control-Allow-Origin: *, https://3dprint.iobuilds.com" errors)
+        proxy_hide_header Access-Control-Allow-Origin;
+        proxy_hide_header Access-Control-Allow-Credentials;
+        proxy_hide_header Access-Control-Allow-Methods;
+        proxy_hide_header Access-Control-Allow-Headers;
+        proxy_hide_header Access-Control-Expose-Headers;
+        proxy_hide_header Access-Control-Max-Age;
+
+        # Add the single, correct CORS set
+        add_header Access-Control-Allow-Origin      $iobuilds_cors_origin always;
         add_header Access-Control-Allow-Credentials "true" always;
-        add_header Access-Control-Expose-Headers "content-range, content-length, x-upsert" always;
-
-        proxy_pass http://127.0.0.1:8000;   # Supabase Kong
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+        add_header Access-Control-Expose-Headers    "content-range, content-length, x-upsert" always;
     }
 }
