@@ -114,27 +114,41 @@ export default function ShopCheckout() {
     }
 
     setIsSubmitting(true);
+    setUploadProgress(0);
 
     let uploadedSlipPath: string | null = null;
 
     try {
-      // STEP 1: Upload payment slip FIRST. Order is only created if upload succeeds.
-      // This prevents empty/slip-less orders on the VPS when storage upload fails.
+      // STEP 1: Upload payment slip via XHR for progress tracking
       const fileExt = paymentSlip.name.split(".").pop();
       const tempPath = `${user.id}/pending_${Date.now()}.${fileExt}`;
 
-      const { error: uploadError } = await supabase.storage
-        .from("payment-slips")
-        .upload(tempPath, paymentSlip, { upsert: false });
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      const apiKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/payment-slips/${tempPath}`;
 
-      if (uploadError) {
-        const m = (uploadError.message || "").toLowerCase();
-        if (m.includes("failed to fetch") || m.includes("networkerror")) {
-          throw new Error("Payment slip upload is blocked or the storage server is unreachable. Your order was NOT placed. This is usually a storage CORS/server configuration issue on the VPS.");
-        }
-        throw new Error(`Failed to upload payment slip: ${uploadError.message}`);
-      }
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url);
+        xhr.setRequestHeader("Authorization", `Bearer ${accessToken}`);
+        xhr.setRequestHeader("apikey", apiKey);
+        xhr.setRequestHeader("x-upsert", "false");
+        if (paymentSlip.type) xhr.setRequestHeader("Content-Type", paymentSlip.type);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            setUploadProgress(Math.round((e.loaded / e.total) * 100));
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error(`Failed to upload payment slip (${xhr.status}): ${xhr.responseText || xhr.statusText}`));
+        };
+        xhr.onerror = () => reject(new Error("Payment slip upload is blocked or the storage server is unreachable. Your order was NOT placed. This is usually a storage CORS/server configuration issue on the VPS."));
+        xhr.send(paymentSlip);
+      });
       uploadedSlipPath = tempPath;
+      setUploadProgress(100);
 
       // STEP 2: Create the order
       const { data: order, error: orderError } = await supabase
