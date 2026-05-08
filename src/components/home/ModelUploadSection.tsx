@@ -9,6 +9,7 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Progress } from "@/components/ui/progress";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { MATERIALS, QUALITY_PRESETS } from "@/lib/constants";
@@ -95,6 +96,8 @@ export function ModelUploadSection() {
   const [activeModel, setActiveModel] = useState<number>(0);
   const [expandedModels, setExpandedModels] = useState<Set<number>>(new Set([0]));
   const [isLoading, setIsLoading] = useState(false);
+  const [loadProgress, setLoadProgress] = useState(0);
+  const [loadingFileName, setLoadingFileName] = useState<string>("");
   const [availableColors, setAvailableColors] = useState<AvailableColor[]>([]);
   const [userCoupons, setUserCoupons] = useState<UserCoupon[]>([]);
   const [selectedCouponId, setSelectedCouponId] = useState<string | null>(null);
@@ -223,12 +226,32 @@ export function ModelUploadSection() {
     }
 
     setIsLoading(true);
-    
+    setLoadProgress(0);
+    setLoadingFileName(file.name);
+
     try {
-      const arrayBuffer = await file.arrayBuffer();
+      // Read file with progress tracking (0% -> 90%)
+      const arrayBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onprogress = (e) => {
+          if (e.lengthComputable) {
+            setLoadProgress(Math.round((e.loaded / e.total) * 90));
+          }
+        };
+        reader.onload = () => resolve(reader.result as ArrayBuffer);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsArrayBuffer(file);
+      });
+
+      // Parsing phase (90% -> 100%)
+      setLoadProgress(95);
+      // Yield to the browser so the progress UI can paint before the heavy parse
+      await new Promise((r) => setTimeout(r, 30));
       const geometry = parseSTL(arrayBuffer);
+      setLoadProgress(100);
+
       const defaultColor = availableColors.length > 0 ? availableColors[0].hex_value : "#FFFFFF";
-      
+
       const newIndex = uploadedModels.length;
       setUploadedModels(prev => [...prev, {
         file,
@@ -237,13 +260,18 @@ export function ModelUploadSection() {
         config: { ...defaultConfig, color: defaultColor }
       }]);
       setActiveModel(newIndex);
-      
+
       // Collapse all except the new one
       setExpandedModels(new Set([newIndex]));
     } catch (error) {
       console.error("Error parsing model:", error);
     } finally {
-      setIsLoading(false);
+      // Brief delay so users see the 100% state
+      setTimeout(() => {
+        setIsLoading(false);
+        setLoadProgress(0);
+        setLoadingFileName("");
+      }, 250);
     }
   }, [parseSTL, uploadedModels.length, availableColors]);
 
