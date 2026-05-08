@@ -39,6 +39,7 @@ export default function ShopCheckout() {
   const [notes, setNotes] = useState("");
   const [paymentSlip, setPaymentSlip] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [showBankDetails, setShowBankDetails] = useState(false);
 
   // Get user profile for pre-fill
