@@ -62,6 +62,8 @@ interface Order {
   status: string;
   total_price: number | null;
   delivery_charge: number | null;
+  admin_discount_value?: number | null;
+  admin_discount_type?: string | null;
   created_at: string;
   updated_at: string;
   notes: string | null;
@@ -103,6 +105,8 @@ export default function AdminOrders() {
   const [itemPrices, setItemPrices] = useState<Record<string, number>>({});
   const [itemWeights, setItemWeights] = useState<Record<string, number>>({});
   const [deliveryCharge, setDeliveryCharge] = useState<number>(350);
+  const [adminDiscountValue, setAdminDiscountValue] = useState<number>(0);
+  const [adminDiscountType, setAdminDiscountType] = useState<"amount" | "percentage">("amount");
   const [isSavingPrices, setIsSavingPrices] = useState(false);
   const [viewingSlip, setViewingSlip] = useState<string | null>(null);
   const [viewingSlipOrderId, setViewingSlipOrderId] = useState<string | null>(null);
@@ -579,7 +583,9 @@ export default function AdminOrders() {
     });
     setItemPrices(prices);
     setItemWeights(weights);
-    setDeliveryCharge(order.delivery_charge || 350);
+    setDeliveryCharge(Number(order.delivery_charge) || 350);
+    setAdminDiscountValue(Number(order.admin_discount_value) || 0);
+    setAdminDiscountType((order.admin_discount_type as "amount" | "percentage") || "amount");
   };
 
   const calculateTotal = () => {
@@ -616,12 +622,22 @@ export default function AdminOrders() {
     return coupon.discount_value; // Fixed amount
   };
 
-  // Get the final price after discount
+  // Admin manual discount calculation
+  const calculateAdminDiscount = (subtotal: number): number => {
+    if (!adminDiscountValue || adminDiscountValue <= 0) return 0;
+    if (adminDiscountType === "percentage") {
+      return Math.round((subtotal * adminDiscountValue) / 100);
+    }
+    return adminDiscountValue;
+  };
+
+  // Get the final price after coupon + admin discount
   const calculateFinalTotal = () => {
     const subtotal = calculateTotal();
     const couponInfo = getAppliedCouponInfo(pricingOrder);
-    const discount = calculateDiscount(subtotal, couponInfo);
-    return Math.max(0, subtotal - discount);
+    const couponDiscount = calculateDiscount(subtotal, couponInfo);
+    const adminDiscount = calculateAdminDiscount(subtotal);
+    return Math.max(0, subtotal - couponDiscount - adminDiscount);
   };
 
   const handleSavePrices = async () => {
@@ -642,14 +658,17 @@ export default function AdminOrders() {
 
       const subtotal = calculateTotal();
       const couponInfo = getAppliedCouponInfo(pricingOrder);
-      const discount = calculateDiscount(subtotal, couponInfo);
-      const finalTotal = Math.max(0, subtotal - discount);
+      const couponDiscount = calculateDiscount(subtotal, couponInfo);
+      const adminDiscount = calculateAdminDiscount(subtotal);
+      const finalTotal = Math.max(0, subtotal - couponDiscount - adminDiscount);
       const isFirstPricing = pricingOrder.status === "pending_review";
       
       // Save the final price (after discount) - this is what customer actually pays
       const updateData: any = {
         total_price: finalTotal,
         delivery_charge: deliveryCharge,
+        admin_discount_value: adminDiscountValue || 0,
+        admin_discount_type: adminDiscountType,
       };
 
       if (isFirstPricing) {
@@ -669,8 +688,11 @@ export default function AdminOrders() {
         try {
           // Build message with discount info if applicable
           let message = `Your order #${pricingOrder.id.slice(0, 8)} has been priced at ${formatPrice(finalTotal)}.`;
-          if (discount > 0 && couponInfo) {
-            message = `Your order #${pricingOrder.id.slice(0, 8)} has been priced at ${formatPrice(finalTotal)} (Coupon ${couponInfo.code}: -${formatPrice(discount)} applied).`;
+          if (couponDiscount > 0 && couponInfo) {
+            message = `Your order #${pricingOrder.id.slice(0, 8)} has been priced at ${formatPrice(finalTotal)} (Coupon ${couponInfo.code}: -${formatPrice(couponDiscount)} applied).`;
+          }
+          if (adminDiscount > 0) {
+            message += ` Special discount: -${formatPrice(adminDiscount)}.`;
           }
           message += " Please upload your bank transfer slip to proceed.";
 
@@ -1305,13 +1327,41 @@ export default function AdminOrders() {
                     </div>
                   </div>
 
+                  {/* Admin Discount */}
+                  <div className="flex items-center gap-3 p-3 border rounded-lg bg-muted/50">
+                    <Tag className="w-4 h-4 text-muted-foreground" />
+                    <div className="flex-1">
+                      <Label>Discount</Label>
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        className="w-28"
+                        value={adminDiscountValue || ""}
+                        placeholder="0"
+                        onChange={(e) => setAdminDiscountValue(Number(e.target.value) || 0)}
+                      />
+                      <select
+                        value={adminDiscountType}
+                        onChange={(e) => setAdminDiscountType(e.target.value as "amount" | "percentage")}
+                        className="h-10 rounded-md border border-input bg-background px-2 text-sm"
+                      >
+                        <option value="amount">LKR</option>
+                        <option value="percentage">%</option>
+                      </select>
+                    </div>
+                  </div>
+
                   {/* Price Summary */}
                   {(() => {
                     const couponInfo = getAppliedCouponInfo(pricingOrder);
                     const itemsTotal = Object.values(itemPrices).reduce((sum, p) => sum + (p || 0), 0);
                     const subtotal = itemsTotal + deliveryCharge;
                     const discountAmount = calculateDiscount(subtotal, couponInfo);
-                    const customerPays = Math.max(0, subtotal - discountAmount);
+                    const adminDiscountAmount = calculateAdminDiscount(subtotal);
+                    const customerPays = Math.max(0, subtotal - discountAmount - adminDiscountAmount);
                     
                     return (
                       <div className="space-y-3 p-4 bg-slate-100 dark:bg-slate-800 rounded-lg border-2 border-slate-200 dark:border-slate-700">
@@ -1347,9 +1397,26 @@ export default function AdminOrders() {
                           </div>
                         )}
 
+                        {adminDiscountAmount > 0 && (
+                          <div className="flex justify-between items-center p-3 bg-amber-100 dark:bg-amber-900/40 rounded-lg border border-amber-300 dark:border-amber-700">
+                            <span className="flex items-center gap-2 text-amber-700 dark:text-amber-300 font-medium">
+                              <Tag className="w-4 h-4" />
+                              <span>Admin Discount</span>
+                              <Badge className="bg-amber-600 text-white text-xs">
+                                {adminDiscountType === "percentage"
+                                  ? `${adminDiscountValue}% OFF`
+                                  : formatPrice(adminDiscountValue) + " OFF"}
+                              </Badge>
+                            </span>
+                            <span className="font-bold text-lg text-amber-700 dark:text-amber-300">
+                              -{formatPrice(adminDiscountAmount)}
+                            </span>
+                          </div>
+                        )}
+
                         <div className="flex justify-between items-center p-4 bg-primary/20 rounded-lg border-2 border-primary/30 mt-2">
                           <span className="font-bold text-lg">
-                            {couponInfo ? "🎉 Customer Pays" : "Total"}
+                            {(couponInfo || adminDiscountAmount > 0) ? "🎉 Customer Pays" : "Total"}
                           </span>
                           <span className="text-3xl font-bold text-primary">
                             {formatPrice(customerPays)}

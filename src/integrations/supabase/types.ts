@@ -321,6 +321,8 @@ export type Database = {
       }
       orders: {
         Row: {
+          admin_discount_type: string
+          admin_discount_value: number
           created_at: string
           delivery_charge: number | null
           id: string
@@ -336,6 +338,8 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          admin_discount_type?: string
+          admin_discount_value?: number
           created_at?: string
           delivery_charge?: number | null
           id?: string
@@ -351,6 +355,8 @@ export type Database = {
           user_id: string
         }
         Update: {
+          admin_discount_type?: string
+          admin_discount_value?: number
           created_at?: string
           delivery_charge?: number | null
           id?: string
