@@ -658,14 +658,17 @@ export default function AdminOrders() {
 
       const subtotal = calculateTotal();
       const couponInfo = getAppliedCouponInfo(pricingOrder);
-      const discount = calculateDiscount(subtotal, couponInfo);
-      const finalTotal = Math.max(0, subtotal - discount);
+      const couponDiscount = calculateDiscount(subtotal, couponInfo);
+      const adminDiscount = calculateAdminDiscount(subtotal);
+      const finalTotal = Math.max(0, subtotal - couponDiscount - adminDiscount);
       const isFirstPricing = pricingOrder.status === "pending_review";
       
       // Save the final price (after discount) - this is what customer actually pays
       const updateData: any = {
         total_price: finalTotal,
         delivery_charge: deliveryCharge,
+        admin_discount_value: adminDiscountValue || 0,
+        admin_discount_type: adminDiscountType,
       };
 
       if (isFirstPricing) {
