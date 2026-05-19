@@ -688,8 +688,11 @@ export default function AdminOrders() {
         try {
           // Build message with discount info if applicable
           let message = `Your order #${pricingOrder.id.slice(0, 8)} has been priced at ${formatPrice(finalTotal)}.`;
-          if (discount > 0 && couponInfo) {
-            message = `Your order #${pricingOrder.id.slice(0, 8)} has been priced at ${formatPrice(finalTotal)} (Coupon ${couponInfo.code}: -${formatPrice(discount)} applied).`;
+          if (couponDiscount > 0 && couponInfo) {
+            message = `Your order #${pricingOrder.id.slice(0, 8)} has been priced at ${formatPrice(finalTotal)} (Coupon ${couponInfo.code}: -${formatPrice(couponDiscount)} applied).`;
+          }
+          if (adminDiscount > 0) {
+            message += ` Special discount: -${formatPrice(adminDiscount)}.`;
           }
           message += " Please upload your bank transfer slip to proceed.";
 
