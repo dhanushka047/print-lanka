@@ -1327,13 +1327,41 @@ export default function AdminOrders() {
                     </div>
                   </div>
 
+                  {/* Admin Discount */}
+                  <div className="flex items-center gap-3 p-3 border rounded-lg bg-muted/50">
+                    <Tag className="w-4 h-4 text-muted-foreground" />
+                    <div className="flex-1">
+                      <Label>Discount</Label>
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        className="w-28"
+                        value={adminDiscountValue || ""}
+                        placeholder="0"
+                        onChange={(e) => setAdminDiscountValue(Number(e.target.value) || 0)}
+                      />
+                      <select
+                        value={adminDiscountType}
+                        onChange={(e) => setAdminDiscountType(e.target.value as "amount" | "percentage")}
+                        className="h-10 rounded-md border border-input bg-background px-2 text-sm"
+                      >
+                        <option value="amount">LKR</option>
+                        <option value="percentage">%</option>
+                      </select>
+                    </div>
+                  </div>
+
                   {/* Price Summary */}
                   {(() => {
                     const couponInfo = getAppliedCouponInfo(pricingOrder);
                     const itemsTotal = Object.values(itemPrices).reduce((sum, p) => sum + (p || 0), 0);
                     const subtotal = itemsTotal + deliveryCharge;
                     const discountAmount = calculateDiscount(subtotal, couponInfo);
-                    const customerPays = Math.max(0, subtotal - discountAmount);
+                    const adminDiscountAmount = calculateAdminDiscount(subtotal);
+                    const customerPays = Math.max(0, subtotal - discountAmount - adminDiscountAmount);
                     
                     return (
                       <div className="space-y-3 p-4 bg-slate-100 dark:bg-slate-800 rounded-lg border-2 border-slate-200 dark:border-slate-700">
@@ -1369,9 +1397,26 @@ export default function AdminOrders() {
                           </div>
                         )}
 
+                        {adminDiscountAmount > 0 && (
+                          <div className="flex justify-between items-center p-3 bg-amber-100 dark:bg-amber-900/40 rounded-lg border border-amber-300 dark:border-amber-700">
+                            <span className="flex items-center gap-2 text-amber-700 dark:text-amber-300 font-medium">
+                              <Tag className="w-4 h-4" />
+                              <span>Admin Discount</span>
+                              <Badge className="bg-amber-600 text-white text-xs">
+                                {adminDiscountType === "percentage"
+                                  ? `${adminDiscountValue}% OFF`
+                                  : formatPrice(adminDiscountValue) + " OFF"}
+                              </Badge>
+                            </span>
+                            <span className="font-bold text-lg text-amber-700 dark:text-amber-300">
+                              -{formatPrice(adminDiscountAmount)}
+                            </span>
+                          </div>
+                        )}
+
                         <div className="flex justify-between items-center p-4 bg-primary/20 rounded-lg border-2 border-primary/30 mt-2">
                           <span className="font-bold text-lg">
-                            {couponInfo ? "🎉 Customer Pays" : "Total"}
+                            {(couponInfo || adminDiscountAmount > 0) ? "🎉 Customer Pays" : "Total"}
                           </span>
                           <span className="text-3xl font-bold text-primary">
                             {formatPrice(customerPays)}
