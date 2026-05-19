@@ -583,7 +583,9 @@ export default function AdminOrders() {
     });
     setItemPrices(prices);
     setItemWeights(weights);
-    setDeliveryCharge(order.delivery_charge || 350);
+    setDeliveryCharge(Number(order.delivery_charge) || 350);
+    setAdminDiscountValue(Number(order.admin_discount_value) || 0);
+    setAdminDiscountType((order.admin_discount_type as "amount" | "percentage") || "amount");
   };
 
   const calculateTotal = () => {
