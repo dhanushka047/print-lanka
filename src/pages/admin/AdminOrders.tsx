@@ -622,12 +622,22 @@ export default function AdminOrders() {
     return coupon.discount_value; // Fixed amount
   };
 
-  // Get the final price after discount
+  // Admin manual discount calculation
+  const calculateAdminDiscount = (subtotal: number): number => {
+    if (!adminDiscountValue || adminDiscountValue <= 0) return 0;
+    if (adminDiscountType === "percentage") {
+      return Math.round((subtotal * adminDiscountValue) / 100);
+    }
+    return adminDiscountValue;
+  };
+
+  // Get the final price after coupon + admin discount
   const calculateFinalTotal = () => {
     const subtotal = calculateTotal();
     const couponInfo = getAppliedCouponInfo(pricingOrder);
-    const discount = calculateDiscount(subtotal, couponInfo);
-    return Math.max(0, subtotal - discount);
+    const couponDiscount = calculateDiscount(subtotal, couponInfo);
+    const adminDiscount = calculateAdminDiscount(subtotal);
+    return Math.max(0, subtotal - couponDiscount - adminDiscount);
   };
 
   const handleSavePrices = async () => {
