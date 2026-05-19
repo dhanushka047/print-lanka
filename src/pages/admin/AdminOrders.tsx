@@ -62,6 +62,8 @@ interface Order {
   status: string;
   total_price: number | null;
   delivery_charge: number | null;
+  admin_discount_value?: number | null;
+  admin_discount_type?: string | null;
   created_at: string;
   updated_at: string;
   notes: string | null;
