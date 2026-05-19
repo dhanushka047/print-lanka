@@ -105,6 +105,8 @@ export default function AdminOrders() {
   const [itemPrices, setItemPrices] = useState<Record<string, number>>({});
   const [itemWeights, setItemWeights] = useState<Record<string, number>>({});
   const [deliveryCharge, setDeliveryCharge] = useState<number>(350);
+  const [adminDiscountValue, setAdminDiscountValue] = useState<number>(0);
+  const [adminDiscountType, setAdminDiscountType] = useState<"amount" | "percentage">("amount");
   const [isSavingPrices, setIsSavingPrices] = useState(false);
   const [viewingSlip, setViewingSlip] = useState<string | null>(null);
   const [viewingSlipOrderId, setViewingSlipOrderId] = useState<string | null>(null);
