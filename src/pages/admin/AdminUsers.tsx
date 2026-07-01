@@ -56,17 +56,9 @@ export default function AdminUsers() {
 
     setIsDeleting(true);
     try {
-      // Delete user's roles first
-      await supabase
-        .from("user_roles")
-        .delete()
-        .eq("user_id", deleteDialog.user_id);
-
-      // Delete user's profile
-      const { error } = await supabase
-        .from("profiles")
-        .delete()
-        .eq("user_id", deleteDialog.user_id);
+      const { error } = await supabase.rpc("delete_user_by_admin" as any, {
+        target_user_id: deleteDialog.user_id,
+      });
 
       if (error) throw error;
 
