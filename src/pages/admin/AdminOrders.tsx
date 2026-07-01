@@ -128,9 +128,29 @@ export default function AdminOrders() {
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
+  const [availableColors, setAvailableColors] = useState<{ id: string; name: string; hex_value: string }[]>([]);
+  
+  // Batch edit order specifications state
+  const [editingOrderSpecs, setEditingOrderSpecs] = useState<Order | null>(null);
+  const [editedItemsState, setEditedItemsState] = useState<Record<string, OrderItem>>({});
+  const [isSavingSpecs, setIsSavingSpecs] = useState(false);
+
   useEffect(() => {
     fetchOrders();
     fetchPricingConfig();
+
+    // Fetch available colors
+    const fetchColors = async () => {
+      const { data } = await supabase
+        .from("available_colors")
+        .select("id, name, hex_value")
+        .eq("is_active", true)
+        .order("sort_order");
+      if (data) {
+        setAvailableColors(data);
+      }
+    };
+    fetchColors();
 
     // Set up real-time subscription
     const channel = supabase
@@ -719,6 +739,209 @@ export default function AdminOrders() {
     }
   };
 
+  const openEditOrderSpecsDialog = (order: Order) => {
+    setEditingOrderSpecs(order);
+    const initialItemsState: Record<string, OrderItem> = {};
+    order.order_items.forEach(item => {
+      initialItemsState[item.id] = { ...item };
+    });
+    setEditedItemsState(initialItemsState);
+  };
+
+  const updateEditedItemField = (itemId: string, key: keyof OrderItem, value: any) => {
+    setEditedItemsState(prev => ({
+      ...prev,
+      [itemId]: {
+        ...prev[itemId],
+        [key]: value
+      }
+    }));
+  };
+
+  const updateOrderTotal = async (orderId: string) => {
+    const { data: items, error: itemsError } = await supabase
+      .from("order_items")
+      .select("price")
+      .eq("order_id", orderId);
+      
+    if (itemsError) throw itemsError;
+    
+    const { data: order, error: orderError } = await supabase
+      .from("orders")
+      .select("delivery_charge, admin_discount_value, admin_discount_type, total_price, user_id")
+      .eq("id", orderId)
+      .single();
+      
+    if (orderError) throw orderError;
+    
+    if (order.total_price === null) {
+      return { finalTotal: null };
+    }
+    
+    const itemsTotal = items.reduce((sum, item) => sum + (item.price || 0), 0);
+    const delivery = order.delivery_charge || 0;
+    const subtotal = itemsTotal + delivery;
+    
+    let couponDiscount = 0;
+    const { data: userCoupons } = await supabase
+      .from("user_coupons")
+      .select(`
+        coupons (
+          discount_type,
+          discount_value
+        )
+      `)
+      .eq("used_on_order_id", orderId)
+      .maybeSingle();
+      
+    if (userCoupons?.coupons) {
+      const cp = userCoupons.coupons as any;
+      couponDiscount = cp.discount_type === "percentage"
+        ? Math.round((subtotal * cp.discount_value) / 100)
+        : cp.discount_value;
+    }
+    
+    let adminDiscount = 0;
+    if (order.admin_discount_value && order.admin_discount_value > 0) {
+      adminDiscount = order.admin_discount_type === "percentage"
+        ? Math.round((subtotal * order.admin_discount_value) / 100)
+        : order.admin_discount_value;
+    }
+    
+    const finalTotal = Math.max(0, subtotal - couponDiscount - adminDiscount);
+    
+    const { error: updateError } = await supabase
+      .from("orders")
+      .update({ total_price: finalTotal })
+      .eq("id", orderId);
+      
+    if (updateError) throw updateError;
+    
+    return { finalTotal, itemsTotal };
+  };
+
+  const handleSaveOrderSpecs = async () => {
+    if (!editingOrderSpecs) return;
+
+    setIsSavingSpecs(true);
+    try {
+      // 1. Save all modified order items
+      for (const [itemId, item] of Object.entries(editedItemsState)) {
+        const { error: itemError } = await supabase
+          .from("order_items")
+          .update({
+            color: item.color,
+            quantity: item.quantity,
+            material: item.material as any,
+            quality: item.quality as any,
+            infill_percentage: item.infill_percentage,
+            weight_grams: item.weight_grams === "" || item.weight_grams === null ? null : Number(item.weight_grams),
+            price: item.price === "" || item.price === null ? null : Number(item.price),
+            notes: item.notes || null,
+          })
+          .eq("id", itemId);
+
+        if (itemError) throw itemError;
+      }
+
+      // 2. Recalculate order total price
+      const updateRes = await updateOrderTotal(editingOrderSpecs.id);
+
+      // 3. Compile changed specs and send unified SMS
+      if (editingOrderSpecs.profile?.phone) {
+        const changeMessages: string[] = [];
+        
+        editingOrderSpecs.order_items.forEach(originalItem => {
+          const newItem = editedItemsState[originalItem.id];
+          if (!newItem) return;
+          
+          const itemChanges: string[] = [];
+          if (originalItem.color !== newItem.color) {
+            const oldColor = availableColors.find(c => c.hex_value === originalItem.color)?.name || originalItem.color;
+            const newColor = availableColors.find(c => c.hex_value === newItem.color)?.name || newItem.color;
+            itemChanges.push(`color changed from ${oldColor} to ${newColor}`);
+          }
+          if (originalItem.quantity !== newItem.quantity) {
+            itemChanges.push(`qty: ${originalItem.quantity} -> ${newItem.quantity}`);
+          }
+          if (originalItem.material !== newItem.material) {
+            itemChanges.push(`material: ${originalItem.material.toUpperCase()} -> ${newItem.material.toUpperCase()}`);
+          }
+          if (originalItem.quality !== newItem.quality) {
+            itemChanges.push(`quality: ${originalItem.quality} -> ${newItem.quality}`);
+          }
+          if (originalItem.infill_percentage !== newItem.infill_percentage) {
+            itemChanges.push(`infill: ${originalItem.infill_percentage}% -> ${newItem.infill_percentage}%`);
+          }
+          if (originalItem.weight_grams !== newItem.weight_grams) {
+            const oldW = originalItem.weight_grams !== null ? `${originalItem.weight_grams}g` : "not set";
+            const newW = newItem.weight_grams !== null ? `${newItem.weight_grams}g` : "not set";
+            itemChanges.push(`weight: ${oldW} -> ${newW}`);
+          }
+          if (originalItem.price !== newItem.price) {
+            const oldP = originalItem.price !== null ? formatPrice(originalItem.price) : "not set";
+            const newP = newItem.price !== null ? formatPrice(newItem.price) : "not set";
+            itemChanges.push(`price: ${oldP} -> ${newP}`);
+          }
+
+          if (itemChanges.length > 0) {
+            changeMessages.push(`"${originalItem.file_name}": ${itemChanges.join(", ")}`);
+          }
+        });
+
+        if (changeMessages.length > 0) {
+          let changesMsg = `Changes: ${changeMessages.join("; ")}.`;
+          let totalMsg = "";
+          if (updateRes.finalTotal !== null) {
+            totalMsg = ` New order total: ${formatPrice(updateRes.finalTotal)}.`;
+          }
+          const message = `Your order #${editingOrderSpecs.id.slice(0, 8)} specifications have been updated by admin. ${changesMsg}${totalMsg}`;
+
+          try {
+            await supabase.functions.invoke("send-sms", {
+              body: {
+                phone: editingOrderSpecs.profile.phone,
+                message,
+                order_id: editingOrderSpecs.id,
+                user_id: editingOrderSpecs.user_id,
+              },
+            });
+          } catch (smsError) {
+            console.error("SMS notification failed:", smsError);
+          }
+        }
+      }
+
+      setEditingOrderSpecs(null);
+      fetchOrders();
+      
+      if (detailsOrder && detailsOrder.id === editingOrderSpecs.id) {
+        const updatedOrderItems = detailsOrder.order_items.map(item => {
+          const newItem = editedItemsState[item.id];
+          return newItem ? { ...newItem } : item;
+        });
+        
+        let newTotal = detailsOrder.total_price;
+        if (updateRes.finalTotal !== null) {
+          newTotal = updateRes.finalTotal;
+        }
+
+        setDetailsOrder(prev => prev ? {
+          ...prev,
+          order_items: updatedOrderItems,
+          total_price: newTotal
+        } : null);
+      }
+
+      toast.success("Order specifications updated and customer notified");
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error.message || "Failed to update order specifications");
+    } finally {
+      setIsSavingSpecs(false);
+    }
+  };
+
   const handleViewPaymentSlip = async (filePath: string, orderId: string) => {
     const { data } = await supabase.storage
       .from("payment-slips")
@@ -1120,11 +1343,22 @@ export default function AdminOrders() {
                       <TableRow className="bg-muted/50">
                         <TableCell colSpan={11}>
                           <div className="p-4 space-y-4">
-                            <div className="flex justify-between items-start">
-                              <div>
-                                <h4 className="font-semibold mb-2">Order Items</h4>
+                            <div className="flex justify-between items-start gap-4 flex-wrap">
+                              <div className="flex flex-col gap-2">
+                                <div className="flex items-center gap-4 flex-wrap">
+                                  <h4 className="font-semibold">Order Items</h4>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => openEditOrderSpecsDialog(order)}
+                                    className="gap-2 h-8 text-xs"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                    Edit Specifications
+                                  </Button>
+                                </div>
                                 {order.notes && (
-                                  <p className="text-sm text-muted-foreground mb-2">
+                                  <p className="text-sm text-muted-foreground">
                                     Notes: {order.notes}
                                   </p>
                                 )}
@@ -1207,7 +1441,7 @@ export default function AdminOrders() {
 
       {/* Pricing Dialog */}
       <Dialog open={!!pricingOrder} onOpenChange={() => setPricingOrder(null)}>
-        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
+        <DialogContent className="max-w-2xl max-h-[90vh] !flex !flex-col overflow-hidden">
           <DialogHeader className="flex-shrink-0">
             <DialogTitle>Set Order Prices</DialogTitle>
             <DialogDescription className="text-sm text-muted-foreground">
@@ -1217,7 +1451,7 @@ export default function AdminOrders() {
           
           {pricingOrder && (
             <>
-              <ScrollArea className="flex-1 pr-4 -mr-4">
+              <div className="flex-1 overflow-y-auto pr-4">
                 <div className="space-y-4 pb-4">
                   <div className="flex items-center justify-end">
                     <Button 
@@ -1426,7 +1660,7 @@ export default function AdminOrders() {
                     );
                   })()}
                 </div>
-              </ScrollArea>
+              </div>
 
               <DialogFooter className="flex-shrink-0 border-t pt-4 mt-4 bg-background">
                 <Button variant="outline" onClick={() => setPricingOrder(null)}>
@@ -1701,6 +1935,19 @@ export default function AdminOrders() {
             <Button variant="outline" onClick={() => setDetailsOrder(null)}>
               Close
             </Button>
+            <Button 
+              variant="outline"
+              onClick={() => {
+                if (detailsOrder) {
+                  openEditOrderSpecsDialog(detailsOrder);
+                  setDetailsOrder(null);
+                }
+              }}
+              className="gap-2"
+            >
+              <Edit2 className="w-4 h-4" />
+              Edit Specifications
+            </Button>
             <Button onClick={() => {
               if (detailsOrder) {
                 openPricingDialog(detailsOrder);
@@ -1709,6 +1956,192 @@ export default function AdminOrders() {
             }}>
               <DollarSign className="w-4 h-4 mr-2" />
               Set/Update Price
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Order Specs Dialog */}
+      <Dialog open={!!editingOrderSpecs} onOpenChange={() => setEditingOrderSpecs(null)}>
+        <DialogContent className="max-w-3xl max-h-[90vh] !flex !flex-col overflow-hidden">
+          <DialogHeader className="flex-shrink-0">
+            <DialogTitle>Edit Order Specifications</DialogTitle>
+            <DialogDescription className="text-sm text-muted-foreground">
+              Order #{editingOrderSpecs?.id.slice(0, 8)} • {editingOrderSpecs?.profile?.first_name} {editingOrderSpecs?.profile?.last_name}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto pr-4 space-y-4 py-2">
+            {editingOrderSpecs && editingOrderSpecs.order_items.map((originalItem) => {
+              const item = editedItemsState[originalItem.id];
+              if (!item) return null;
+
+              return (
+                <div key={item.id} className="p-4 border rounded-lg space-y-4 bg-card">
+                  <div className="flex items-center justify-between border-b pb-2">
+                    <span className="font-semibold text-sm text-primary truncate max-w-lg">
+                      {item.file_name}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      Original: {originalItem.material.toUpperCase()} • {originalItem.quality} • {originalItem.infill_percentage}% • {originalItem.quantity}x
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Color selection */}
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Color</Label>
+                      <div className="flex gap-2">
+                        <Select 
+                          value={item.color} 
+                          onValueChange={(val) => updateEditedItemField(item.id, "color", val)}
+                        >
+                          <SelectTrigger className="h-9 text-xs flex-1">
+                            <SelectValue placeholder="Select color" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {availableColors.map((color) => (
+                              <SelectItem key={color.id} value={color.hex_value} className="text-xs">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-3.5 h-3.5 rounded-full border" style={{ backgroundColor: color.hex_value }} />
+                                  <span>{color.name}</span>
+                                </div>
+                              </SelectItem>
+                            ))}
+                            {!availableColors.some(c => c.hex_value === item.color) && item.color && (
+                              <SelectItem value={item.color} className="text-xs">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-3.5 h-3.5 rounded-full border" style={{ backgroundColor: item.color }} />
+                                  <span>Current Color ({item.color})</span>
+                                </div>
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                        <Input 
+                          type="text" 
+                          placeholder="#HEX" 
+                          value={item.color} 
+                          onChange={(e) => updateEditedItemField(item.id, "color", e.target.value)}
+                          className="h-9 text-xs font-mono w-24"
+                        />
+                        <div className="w-9 h-9 rounded-md border flex-shrink-0" style={{ backgroundColor: item.color || '#FFFFFF' }} />
+                      </div>
+                    </div>
+
+                    {/* Material & Quality */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs font-semibold">Material</Label>
+                        <Select 
+                          value={item.material} 
+                          onValueChange={(val) => updateEditedItemField(item.id, "material", val)}
+                        >
+                          <SelectTrigger className="h-9 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="pla" className="text-xs">PLA</SelectItem>
+                            <SelectItem value="petg" className="text-xs">PETG</SelectItem>
+                            <SelectItem value="abs" className="text-xs">ABS</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label className="text-xs font-semibold">Quality</Label>
+                        <Select 
+                          value={item.quality} 
+                          onValueChange={(val) => updateEditedItemField(item.id, "quality", val)}
+                        >
+                          <SelectTrigger className="h-9 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="draft" className="text-xs">Draft (0.3mm)</SelectItem>
+                            <SelectItem value="normal" className="text-xs">Normal (0.2mm)</SelectItem>
+                            <SelectItem value="high" className="text-xs">High (0.1mm)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs font-semibold">Infill %</Label>
+                      <Input
+                        type="number"
+                        min={10}
+                        max={100}
+                        value={item.infill_percentage}
+                        onChange={(e) => updateEditedItemField(item.id, "infill_percentage", Number(e.target.value))}
+                        className="h-9 text-xs"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-xs font-semibold">Quantity</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={item.quantity}
+                        onChange={(e) => updateEditedItemField(item.id, "quantity", Number(e.target.value))}
+                        className="h-9 text-xs"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-xs font-semibold">Weight (g)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        placeholder="Not set"
+                        value={item.weight_grams !== null ? item.weight_grams : ""}
+                        onChange={(e) => updateEditedItemField(item.id, "weight_grams", e.target.value === "" ? null : Number(e.target.value))}
+                        className="h-9 text-xs"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-xs font-semibold">Price (LKR)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="Not set"
+                        value={item.price !== null ? item.price : ""}
+                        onChange={(e) => updateEditedItemField(item.id, "price", e.target.value === "" ? null : Number(e.target.value))}
+                        className="h-9 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-xs font-semibold">Notes</Label>
+                    <Input
+                      placeholder="Special instructions..."
+                      value={item.notes || ""}
+                      onChange={(e) => updateEditedItemField(item.id, "notes", e.target.value)}
+                      className="h-9 text-xs"
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <DialogFooter className="flex-shrink-0 border-t pt-4 mt-2">
+            <Button variant="outline" onClick={() => setEditingOrderSpecs(null)} size="sm">
+              Cancel
+            </Button>
+            <Button onClick={handleSaveOrderSpecs} disabled={isSavingSpecs} size="sm">
+              {isSavingSpecs ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4 mr-2" />
+              )}
+              Save & Notify Customer
             </Button>
           </DialogFooter>
         </DialogContent>
