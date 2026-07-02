@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment, useMemo } from "react";
+import { useState, useEffect, Fragment, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,10 +15,11 @@ import {
   Loader2, ChevronDown, ChevronUp, DollarSign, Send, FileImage, 
   Search, Download, Eye, RefreshCw, Bell, MapPin, Phone, Mail,
   Package, Calendar, FileText, Calculator, Percent, Tag, Truck, Edit2,
-  Trash2, AlertTriangle
+  Trash2, AlertTriangle, Copy, ExternalLink
 } from "lucide-react";
 import { formatPrice, ORDER_STATUSES } from "@/lib/constants";
 import { toast } from "sonner";
+import { Invoice } from "@/components/Invoice";
 
 interface OrderItem {
   id: string;
@@ -134,6 +135,159 @@ export default function AdminOrders() {
   const [editingOrderSpecs, setEditingOrderSpecs] = useState<Order | null>(null);
   const [editedItemsState, setEditedItemsState] = useState<Record<string, OrderItem>>({});
   const [isSavingSpecs, setIsSavingSpecs] = useState(false);
+
+  // Print Job Logging State
+  const [printLogDialog, setPrintLogDialog] = useState<{ orderId: string; order: Order } | null>(null);
+  const [availablePrinters, setAvailablePrinters] = useState<any[]>([]);
+  const [availableFilaments, setAvailableFilaments] = useState<any[]>([]);
+  const [selectedPrinter, setSelectedPrinter] = useState<string>("");
+  const [itemFilaments, setItemFilaments] = useState<Record<string, string>>({});
+  const [itemHours, setItemHours] = useState<Record<string, number>>({});
+  const [itemWeightsUsed, setItemWeightsUsed] = useState<Record<string, number>>({});
+  const [isLoggingPrint, setIsLoggingPrint] = useState(false);
+
+  // Invoice Dialog and Copy Link State
+  const invoiceRef = useRef<HTMLDivElement>(null);
+  const [invoiceOrder, setInvoiceOrder] = useState<Order | null>(null);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+
+  const handleCopyInvoiceLink = (orderId: string) => {
+    const publicUrl = `${window.location.origin}/invoice/${orderId}`;
+    navigator.clipboard.writeText(publicUrl);
+    toast.success("Invoice link copied to clipboard!");
+  };
+
+  const handleDownloadInvoice = async () => {
+    if (!invoiceRef.current || !invoiceOrder) return;
+    
+    setIsGeneratingPdf(true);
+    toast.loading("Generating PDF...", { id: "pdf-generation" });
+    
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const jsPDF = (await import('jspdf')).default;
+      
+      const canvas = await html2canvas(invoiceRef.current, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+      });
+      
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+      });
+      
+      const imgWidth = 210; // A4 width in mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      
+      pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+      pdf.save(`Invoice-${invoiceOrder.id.slice(0, 8).toUpperCase()}.pdf`);
+      
+      toast.success("Invoice downloaded!", { id: "pdf-generation" });
+      setInvoiceOrder(null);
+    } catch (error) {
+      console.error("PDF generation failed:", error);
+      toast.error("Failed to generate PDF", { id: "pdf-generation" });
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
+  useEffect(() => {
+    if (printLogDialog) {
+      const loadPrintLogData = async () => {
+        const [printersRes, filamentsRes] = await Promise.all([
+          supabase.from("printers").select("id, name").eq("status", "active"),
+          supabase.from("filaments").select("id, name, material, color, weight_remaining").eq("is_over", false)
+        ]);
+        if (printersRes.data) {
+          setAvailablePrinters(printersRes.data);
+          if (printersRes.data.length > 0) setSelectedPrinter(printersRes.data[0].id);
+        }
+        if (filamentsRes.data) {
+          setAvailableFilaments(filamentsRes.data);
+          
+          const initialFilaments: Record<string, string> = {};
+          const initialHours: Record<string, number> = {};
+          const initialWeights: Record<string, number> = {};
+          
+          printLogDialog.order.order_items.forEach(item => {
+            const match = filamentsRes.data.find(
+              f => f.material.toLowerCase() === item.material.toLowerCase() &&
+              Number(f.weight_remaining) >= (item.weight_grams || 0) * item.quantity
+            );
+            if (match) {
+              initialFilaments[item.id] = match.id;
+            } else {
+              const materialMatch = filamentsRes.data.find(
+                f => f.material.toLowerCase() === item.material.toLowerCase()
+              );
+              if (materialMatch) initialFilaments[item.id] = materialMatch.id;
+            }
+            initialHours[item.id] = 2; // Default 2 hours
+            initialWeights[item.id] = (item.weight_grams || 0) * item.quantity;
+          });
+          setItemFilaments(initialFilaments);
+          setItemHours(initialHours);
+          setItemWeightsUsed(initialWeights);
+        }
+      };
+      loadPrintLogData();
+    }
+  }, [printLogDialog]);
+
+  const handleSavePrintLog = async () => {
+    if (!printLogDialog) return;
+    setIsLoggingPrint(true);
+    try {
+      for (const item of printLogDialog.order.order_items) {
+        const filamentId = itemFilaments[item.id];
+        const weightUsed = itemWeightsUsed[item.id] || 0;
+        const printHours = itemHours[item.id] || 0;
+
+        if (filamentId && weightUsed > 0) {
+          const { error: usageErr } = await supabase.from("filament_usages").insert({
+            filament_id: filamentId,
+            order_item_id: item.id,
+            printer_id: selectedPrinter || null,
+            weight_used: weightUsed,
+            print_hours: printHours,
+            notes: `Auto-logged for Order #${printLogDialog.orderId.slice(0, 8)} - Item: ${item.file_name}`
+          });
+          if (usageErr) throw usageErr;
+
+          const { data: filamentData } = await supabase
+            .from("filaments")
+            .select("weight_remaining")
+            .eq("id", filamentId)
+            .single();
+
+          if (filamentData) {
+            const newRemaining = Math.max(0, Number(filamentData.weight_remaining) - weightUsed);
+            const { error: updateErr } = await supabase
+              .from("filaments")
+              .update({ 
+                weight_remaining: newRemaining,
+                is_over: newRemaining <= 0
+              })
+              .eq("id", filamentId);
+            if (updateErr) throw updateErr;
+          }
+        }
+      }
+
+      await updateOrderStatus(printLogDialog.orderId, "in_production", printLogDialog.order);
+      setPrintLogDialog(null);
+    } catch (error: any) {
+      toast.error(error.message || "Failed to log print details");
+    } finally {
+      setIsLoggingPrint(false);
+    }
+  };
 
   useEffect(() => {
     fetchOrders();
@@ -435,6 +589,12 @@ export default function AdminOrders() {
     if (newStatus === "shipped") {
       setTrackingNumber(order.tracking_number || "");
       setTrackingDialog({ orderId, order });
+      return;
+    }
+
+    // Intercept in_production status change to log printer/filament usage
+    if (newStatus === "in_production") {
+      setPrintLogDialog({ orderId, order });
       return;
     }
 
@@ -1310,14 +1470,32 @@ export default function AdminOrders() {
                             size="sm"
                             variant="ghost"
                             onClick={() => setDetailsOrder(order)}
+                            title="View Details"
                           >
                             <Eye className="w-4 h-4" />
                           </Button>
                           <Button
                             size="sm"
                             variant="ghost"
+                            title="View Invoice"
+                            onClick={() => setInvoiceOrder(order)}
+                          >
+                            <FileText className="w-4 h-4 text-cyan-600" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            title="Copy Invoice Link"
+                            onClick={() => handleCopyInvoiceLink(order.id)}
+                          >
+                            <Copy className="w-4 h-4 text-emerald-600" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
                             className="text-destructive hover:text-destructive hover:bg-destructive/10"
                             onClick={() => setDeleteDialog(order)}
+                            title="Delete Order"
                           >
                             <Trash2 className="w-4 h-4" />
                           </Button>
@@ -1931,9 +2109,34 @@ export default function AdminOrders() {
             </ScrollArea>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="flex-wrap gap-2 sm:gap-0">
             <Button variant="outline" onClick={() => setDetailsOrder(null)}>
               Close
+            </Button>
+            <Button 
+              variant="outline"
+              onClick={() => {
+                if (detailsOrder) {
+                  setInvoiceOrder(detailsOrder);
+                  setDetailsOrder(null);
+                }
+              }}
+              className="gap-2 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-600 border-cyan-200"
+            >
+              <FileText className="w-4 h-4" />
+              View Invoice
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (detailsOrder) {
+                  handleCopyInvoiceLink(detailsOrder.id);
+                }
+              }}
+              className="gap-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 border-emerald-200"
+            >
+              <Copy className="w-4 h-4" />
+              Copy Link
             </Button>
             <Button 
               variant="outline"
@@ -1946,7 +2149,7 @@ export default function AdminOrders() {
               className="gap-2"
             >
               <Edit2 className="w-4 h-4" />
-              Edit Specifications
+              Edit Specs
             </Button>
             <Button onClick={() => {
               if (detailsOrder) {
@@ -1955,7 +2158,7 @@ export default function AdminOrders() {
               }
             }}>
               <DollarSign className="w-4 h-4 mr-2" />
-              Set/Update Price
+              Price
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2245,6 +2448,184 @@ export default function AdminOrders() {
               Delete {selectedIds.size} Order{selectedIds.size > 1 ? "s" : ""}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Print Logging / Production Dialog */}
+      <Dialog open={!!printLogDialog} onOpenChange={() => setPrintLogDialog(null)}>
+        <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Log Print Job Details</DialogTitle>
+            <DialogDescription>
+              Assign printers and track filament usage before starting production on Order #{printLogDialog?.orderId.slice(0, 8)}
+            </DialogDescription>
+          </DialogHeader>
+
+          {printLogDialog && (
+            <div className="space-y-6 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="printer-select">Select Printer</Label>
+                {availablePrinters.length === 0 ? (
+                  <p className="text-sm text-destructive font-semibold">
+                    No active printers available! Please register and activate printers first.
+                  </p>
+                ) : (
+                  <Select value={selectedPrinter} onValueChange={setSelectedPrinter}>
+                    <SelectTrigger id="printer-select">
+                      <SelectValue placeholder="Select a printer" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availablePrinters.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <h4 className="text-sm font-semibold">Usage logs per item</h4>
+                {printLogDialog.order.order_items.map((item) => {
+                  const matchingSpools = availableFilaments.filter(
+                    (f) => f.material.toLowerCase() === item.material.toLowerCase()
+                  );
+
+                  return (
+                    <div key={item.id} className="p-3 border rounded-lg space-y-3 bg-secondary/20">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="font-semibold text-sm">{item.file_name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            Qty: {item.quantity} | Material: <span className="uppercase">{item.material}</span> | Color: {item.color} | Weight: {item.weight_grams || 0}g
+                          </p>
+                        </div>
+                        <Badge className="bg-primary/15 text-primary border-none">
+                          Qty: {item.quantity}
+                        </Badge>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Filament Spool</Label>
+                          {matchingSpools.length === 0 ? (
+                            <p className="text-xs text-destructive font-medium">No matching filaments spools.</p>
+                          ) : (
+                            <Select 
+                              value={itemFilaments[item.id] || ""} 
+                              onValueChange={(val) => setItemFilaments(prev => ({ ...prev, [item.id]: val }))}
+                            >
+                              <SelectTrigger className="h-8 text-xs">
+                                <SelectValue placeholder="Select spool" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {matchingSpools.map((f) => (
+                                  <SelectItem key={f.id} value={f.id} className="text-xs">
+                                    {f.name} ({f.color}) - {f.weight_remaining}g left
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Hours</Label>
+                            <Input
+                              type="number"
+                              className="h-8 text-xs"
+                              value={itemHours[item.id] || ""}
+                              onChange={(e) => setItemHours(prev => ({ ...prev, [item.id]: Number(e.target.value) }))}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Weight (g)</Label>
+                            <Input
+                              type="number"
+                              className="h-8 text-xs"
+                              value={itemWeightsUsed[item.id] || ""}
+                              onChange={(e) => setItemWeightsUsed(prev => ({ ...prev, [item.id]: Number(e.target.value) }))}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button 
+              variant="outline" 
+              onClick={async () => {
+                if (printLogDialog) {
+                  await updateOrderStatus(printLogDialog.orderId, "in_production", printLogDialog.order);
+                  setPrintLogDialog(null);
+                }
+              }}
+            >
+              Skip & Start Production
+            </Button>
+            <Button 
+              onClick={handleSavePrintLog} 
+              disabled={isLoggingPrint || availablePrinters.length === 0}
+            >
+              {isLoggingPrint && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Save & Start Production
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Invoice Dialog */}
+      <Dialog open={!!invoiceOrder} onOpenChange={() => setInvoiceOrder(null)}>
+        <DialogContent className="max-w-4xl max-h-[90vh] p-0">
+          <DialogHeader className="px-6 pt-6">
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="w-5 h-5" />
+              Invoice
+            </DialogTitle>
+          </DialogHeader>
+          
+          {invoiceOrder && (
+            <>
+              <ScrollArea className="max-h-[65vh] px-6">
+                <Invoice
+                  ref={invoiceRef}
+                  orderId={invoiceOrder.id}
+                  orderItems={invoiceOrder.order_items}
+                  totalPrice={invoiceOrder.total_price || 0}
+                  deliveryCharge={invoiceOrder.delivery_charge || 0}
+                  createdAt={invoiceOrder.created_at}
+                  paidAt={invoiceOrder.paid_at}
+                  trackingNumber={invoiceOrder.tracking_number}
+                  profile={invoiceOrder.profile}
+                  appliedCoupon={invoiceOrder.applied_coupon}
+                  status={invoiceOrder.status}
+                />
+              </ScrollArea>
+              
+              <DialogFooter className="px-6 pb-6 border-t pt-4">
+                <Button variant="outline" onClick={() => setInvoiceOrder(null)}>
+                  Close
+                </Button>
+                <Button variant="outline" onClick={() => handleCopyInvoiceLink(invoiceOrder.id)} className="gap-2">
+                  <Copy className="w-4 h-4" />
+                  Copy Link
+                </Button>
+                <Button onClick={handleDownloadInvoice} disabled={isGeneratingPdf} className="gap-2">
+                  {isGeneratingPdf ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4" />
+                  )}
+                  Download PDF
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>
