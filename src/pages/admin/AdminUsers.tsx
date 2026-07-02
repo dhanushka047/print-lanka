@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { cacheGet, cacheSet, CACHE_USERS } from "@/lib/adminCache";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,10 +27,6 @@ export default function AdminUsers() {
   const [deleteDialog, setDeleteDialog] = useState<User | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
-
   const fetchUsers = async () => {
     const { data: profiles, error: profilesError } = await supabase
       .from("profiles")
@@ -47,9 +44,47 @@ export default function AdminUsers() {
       }));
 
       setUsers(usersWithRoles);
+      // Cache for instant tab switch
+      cacheSet(CACHE_USERS, usersWithRoles, 120_000); // 2 min TTL (users change less often)
     }
     setIsLoading(false);
   };
+
+  useEffect(() => {
+    // ── 1. Show cached data instantly (no spinner on tab switch) ──────────
+    const cached = cacheGet<User[]>(CACHE_USERS);
+    if (cached) {
+      setUsers(cached);
+      setIsLoading(false);
+    }
+
+    // ── 2. Revalidate in background ───────────────────────────────────────
+    fetchUsers();
+
+    // ── 3. Real-time: patch on profile insert/update/delete ──────────────
+    const channel = supabase
+      .channel("admin-users")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "profiles" },
+        () => {
+          // profiles table is small — full refetch is fast and simple
+          fetchUsers();
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "user_roles" },
+        () => {
+          fetchUsers();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const handleDeleteUser = async () => {
     if (!deleteDialog) return;
@@ -64,7 +99,12 @@ export default function AdminUsers() {
 
       toast.success("User deleted successfully");
       setDeleteDialog(null);
-      fetchUsers();
+      // Optimistic remove from local state + cache immediately
+      setUsers(prev => {
+        const next = prev.filter(u => u.user_id !== deleteDialog.user_id);
+        cacheSet(CACHE_USERS, next, 120_000);
+        return next;
+      });
     } catch (error: any) {
       toast.error(error.message || "Failed to delete user");
     } finally {

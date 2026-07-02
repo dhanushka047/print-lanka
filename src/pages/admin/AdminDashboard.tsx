@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { cacheGet, cacheSet, cacheIsStale, CACHE_DASH_STATS, CACHE_DASH_FIN } from "@/lib/adminCache";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { supabase } from "@/integrations/supabase/client";
@@ -64,168 +65,173 @@ export default function AdminDashboard() {
     profit: 0
   });
 
-  useEffect(() => {
-    const fetchStats = async () => {
-      const [ordersRes, pendingRes, usersRes, couponsRes, colorsRes] = await Promise.all([
-        supabase.from("orders").select("id", { count: "exact", head: true }),
-        supabase.from("orders").select("id", { count: "exact", head: true }).eq("status", "pending_review"),
-        supabase.from("profiles").select("id", { count: "exact", head: true }),
-        supabase.from("coupons").select("id", { count: "exact", head: true }).eq("is_active", true),
-        supabase.from("available_colors").select("id", { count: "exact", head: true }).eq("is_active", true),
-      ]);
+  const fetchStats = async () => {
+    const [ordersRes, pendingRes, usersRes, couponsRes, colorsRes] = await Promise.all([
+      supabase.from("orders").select("id", { count: "exact", head: true }),
+      supabase.from("orders").select("id", { count: "exact", head: true }).eq("status", "pending_review"),
+      supabase.from("profiles").select("id", { count: "exact", head: true }),
+      supabase.from("coupons").select("id", { count: "exact", head: true }).eq("is_active", true),
+      supabase.from("available_colors").select("id", { count: "exact", head: true }).eq("is_active", true),
+    ]);
 
-      setStats({
-        totalOrders: ordersRes.count || 0,
-        pendingOrders: pendingRes.count || 0,
-        totalUsers: usersRes.count || 0,
-        activeCoupons: couponsRes.count || 0,
-        totalColors: colorsRes.count || 0,
-      });
+    const newStats: Stats = {
+      totalOrders: ordersRes.count || 0,
+      pendingOrders: pendingRes.count || 0,
+      totalUsers: usersRes.count || 0,
+      activeCoupons: couponsRes.count || 0,
+      totalColors: colorsRes.count || 0,
     };
+    setStats(newStats);
+    cacheSet(CACHE_DASH_STATS, newStats, 60_000);
+  };
 
-    const fetchSMSBalance = async () => {
-      try {
-        const { data, error } = await supabase.functions.invoke("sms-balance");
-        
-        if (error) {
-          console.error("SMS balance error:", error);
-          setSmsBalance({
-            balance: 0,
-            lowBalance: false,
-            loading: false,
-            error: "Failed to fetch SMS balance",
-          });
-          return;
-        }
+  const fetchSMSBalance = async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke("sms-balance");
+      
+      if (error) {
+        console.error("SMS balance error:", error);
+        setSmsBalance({ balance: 0, lowBalance: false, loading: false, error: "Failed to fetch SMS balance" });
+        return;
+      }
 
-        if (data?.success) {
-          setSmsBalance({
-            balance: data.balance || 0,
-            lowBalance: data.lowBalance || false,
-            loading: false,
-            error: null,
-          });
-        } else {
-          setSmsBalance({
-            balance: 0,
-            lowBalance: false,
-            loading: false,
-            error: data?.error || "Unknown error",
-          });
-        }
-      } catch (err) {
-        console.error("SMS balance fetch error:", err);
-        setSmsBalance({
-          balance: 0,
-          lowBalance: false,
-          loading: false,
-          error: "Network error",
-        });
+      if (data?.success) {
+        setSmsBalance({ balance: data.balance || 0, lowBalance: data.lowBalance || false, loading: false, error: null });
+      } else {
+        setSmsBalance({ balance: 0, lowBalance: false, loading: false, error: data?.error || "Unknown error" });
+      }
+    } catch (err) {
+      console.error("SMS balance fetch error:", err);
+      setSmsBalance({ balance: 0, lowBalance: false, loading: false, error: "Network error" });
+    }
+  };
+
+  const fetchFinancialsAndAlerts = async () => {
+    // 1. Fetch completed/paid orders
+    const { data: ordersData } = await supabase
+      .from("orders")
+      .select("id, total_price, created_at")
+      .in("status", ["completed", "shipped", "ready_to_ship", "in_production", "payment_approved"])
+      .not("total_price", "is", null);
+
+    // 2. Fetch filament usages with spools and printers
+    const { data: usagesData } = await supabase
+      .from("filament_usages")
+      .select(`
+        weight_used,
+        print_hours,
+        created_at,
+        filaments (cost, weight_total),
+        printers (hourly_cost)
+      `);
+
+    // 3. Fetch active printers monthly premiums
+    const { data: printersData } = await supabase
+      .from("printers")
+      .select("monthly_premium")
+      .eq("status", "active");
+
+    // 4. Calculate low filaments
+    const { data: filamentsData } = await supabase
+      .from("filaments")
+      .select("id, name, weight_remaining, low_threshold")
+      .eq("is_over", false);
+    
+    const alerts = filamentsData?.filter(f => Number(f.weight_remaining) <= Number(f.low_threshold)) || [];
+    setLowFilaments(alerts);
+
+    // 5. Aggregate metrics by month
+    const monthlyStats: Record<string, { month: string; revenue: number; cost: number; profit: number }> = {};
+
+    const initMonth = (monthKey: string) => {
+      if (!monthlyStats[monthKey]) {
+        monthlyStats[monthKey] = { month: monthKey, revenue: 0, cost: 0, profit: 0 };
       }
     };
 
-    const fetchFinancialsAndAlerts = async () => {
-      // 1. Fetch completed/paid orders
-      const { data: ordersData } = await supabase
-        .from("orders")
-        .select("id, total_price, created_at")
-        .in("status", ["completed", "shipped", "ready_to_ship", "in_production", "payment_approved"])
-        .not("total_price", "is", null);
+    const currentMonthKey = new Date().toLocaleString("default", { month: "short", year: "numeric" });
+    initMonth(currentMonthKey);
 
-      // 2. Fetch filament usages with spools and printers
-      const { data: usagesData } = await supabase
-        .from("filament_usages")
-        .select(`
-          weight_used,
-          print_hours,
-          created_at,
-          filaments (cost, weight_total),
-          printers (hourly_cost)
-        `);
+    ordersData?.forEach(order => {
+      const date = new Date(order.created_at);
+      const monthKey = date.toLocaleString("default", { month: "short", year: "numeric" });
+      initMonth(monthKey);
+      monthlyStats[monthKey].revenue += Number(order.total_price || 0);
+    });
 
-      // 3. Fetch active printers monthly premiums
-      const { data: printersData } = await supabase
-        .from("printers")
-        .select("monthly_premium")
-        .eq("status", "active");
+    usagesData?.forEach(usage => {
+      const date = new Date(usage.created_at);
+      const monthKey = date.toLocaleString("default", { month: "short", year: "numeric" });
+      initMonth(monthKey);
 
-      // 4. Calculate low filaments
-      const { data: filamentsData } = await supabase
-        .from("filaments")
-        .select("id, name, weight_remaining, low_threshold")
-        .eq("is_over", false);
-      
-      const alerts = filamentsData?.filter(f => Number(f.weight_remaining) <= Number(f.low_threshold)) || [];
-      setLowFilaments(alerts);
+      const spoolCost = usage.filaments?.cost ? Number(usage.filaments.cost) : 0;
+      const spoolWeight = usage.filaments?.weight_total ? Number(usage.filaments.weight_total) : 1000;
+      const matCost = spoolWeight > 0 ? usage.weight_used * (spoolCost / spoolWeight) : 0;
 
-      // 5. Aggregate metrics by month
-      const monthlyStats: Record<string, { month: string; revenue: number; cost: number; profit: number }> = {};
+      const hourlyCost = usage.printers?.hourly_cost ? Number(usage.printers.hourly_cost) : 0;
+      const machineCost = usage.print_hours * hourlyCost;
 
-      const initMonth = (monthKey: string) => {
-        if (!monthlyStats[monthKey]) {
-          monthlyStats[monthKey] = { month: monthKey, revenue: 0, cost: 0, profit: 0 };
-        }
-      };
+      monthlyStats[monthKey].cost += Math.round(matCost + machineCost);
+    });
 
-      // Always ensure current month is in chart
-      const currentMonthKey = new Date().toLocaleString("default", { month: "short", year: "numeric" });
-      initMonth(currentMonthKey);
+    const totalPremiums = printersData?.reduce((sum, p) => sum + Number(p.monthly_premium || 0), 0) || 0;
+    Object.keys(monthlyStats).forEach(monthKey => {
+      monthlyStats[monthKey].cost += totalPremiums;
+      monthlyStats[monthKey].profit = monthlyStats[monthKey].revenue - monthlyStats[monthKey].cost;
+    });
 
-      ordersData?.forEach(order => {
-        const date = new Date(order.created_at);
-        const monthKey = date.toLocaleString("default", { month: "short", year: "numeric" });
-        initMonth(monthKey);
-        monthlyStats[monthKey].revenue += Number(order.total_price || 0);
-      });
+    const chartData = Object.values(monthlyStats).sort((a, b) => {
+      return new Date(a.month).getTime() - new Date(b.month).getTime();
+    });
 
-      usagesData?.forEach(usage => {
-        const date = new Date(usage.created_at);
-        const monthKey = date.toLocaleString("default", { month: "short", year: "numeric" });
-        initMonth(monthKey);
+    setPlData(chartData);
 
-        const spoolCost = usage.filaments?.cost ? Number(usage.filaments.cost) : 0;
-        const spoolWeight = usage.filaments?.weight_total ? Number(usage.filaments.weight_total) : 1000;
-        const matCost = spoolWeight > 0 ? usage.weight_used * (spoolCost / spoolWeight) : 0;
+    const revTotal = chartData.reduce((sum, item) => sum + item.revenue, 0);
+    const costTotal = chartData.reduce((sum, item) => sum + item.cost, 0);
+    const newTotals = { revenue: revTotal, cost: costTotal, profit: revTotal - costTotal };
+    setFinancialTotals(newTotals);
 
-        const hourlyCost = usage.printers?.hourly_cost ? Number(usage.printers.hourly_cost) : 0;
-        const machineCost = usage.print_hours * hourlyCost;
+    // Cache for instant tab switch
+    cacheSet(CACHE_DASH_FIN, { plData: chartData, financialTotals: newTotals, lowFilaments: alerts }, 60_000);
+  };
 
-        monthlyStats[monthKey].cost += Math.round(matCost + machineCost);
-      });
+  useEffect(() => {
+    // ── 1. Show cached data INSTANTLY on tab switch ──────────────────────────
+    const cachedStats = cacheGet<Stats>(CACHE_DASH_STATS);
+    const cachedFin   = cacheGet<{
+      plData: PLChartData[];
+      financialTotals: { revenue: number; cost: number; profit: number };
+      lowFilaments: LowFilamentAlert[];
+    }>(CACHE_DASH_FIN);
 
-      // Add monthly premiums to costs for EVERY month in the dataset
-      const totalPremiums = printersData?.reduce((sum, p) => sum + Number(p.monthly_premium || 0), 0) || 0;
-      Object.keys(monthlyStats).forEach(monthKey => {
-        monthlyStats[monthKey].cost += totalPremiums;
-        monthlyStats[monthKey].profit = monthlyStats[monthKey].revenue - monthlyStats[monthKey].cost;
-      });
+    if (cachedStats) setStats(cachedStats);
+    if (cachedFin) {
+      setPlData(cachedFin.plData);
+      setFinancialTotals(cachedFin.financialTotals);
+      setLowFilaments(cachedFin.lowFilaments);
+    }
+    // Skip loading spinner if both caches are warm
+    if (cachedStats && cachedFin) setIsLoading(false);
 
-      const chartData = Object.values(monthlyStats).sort((a, b) => {
-        return new Date(a.month).getTime() - new Date(b.month).getTime();
-      });
-
-      setPlData(chartData);
-
-      const revTotal = chartData.reduce((sum, item) => sum + item.revenue, 0);
-      const costTotal = chartData.reduce((sum, item) => sum + item.cost, 0);
-      setFinancialTotals({
-        revenue: revTotal,
-        cost: costTotal,
-        profit: revTotal - costTotal
-      });
-    };
-
+    // ── 2. Revalidate in background if stale (or first load) ─────────────
     const loadAllData = async () => {
-      setIsLoading(true);
-      await Promise.all([
-        fetchStats(),
-        fetchSMSBalance(),
-        fetchFinancialsAndAlerts()
-      ]);
+      if (!cachedStats || !cachedFin) setIsLoading(true);
+      await Promise.all([fetchStats(), fetchSMSBalance(), fetchFinancialsAndAlerts()]);
       setIsLoading(false);
     };
 
-    loadAllData();
+    if (!cachedStats || !cachedFin || cacheIsStale(CACHE_DASH_STATS) || cacheIsStale(CACHE_DASH_FIN)) {
+      loadAllData();
+    }
+
+    // ── 3. Realtime: keep counters live ───────────────────────────────────
+    const channel = supabase
+      .channel('dash-stats')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetchStats())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => fetchStats())
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   const statCards = [

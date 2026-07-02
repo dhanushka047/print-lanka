@@ -1,4 +1,5 @@
 import { useState, useEffect, Fragment, useMemo, useRef } from "react";
+import { cacheGet, cacheSet, cachePatchItem, CACHE_ORDERS } from "@/lib/adminCache";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -291,6 +292,14 @@ export default function AdminOrders() {
   };
 
   useEffect(() => {
+    // ── 1. Show cached data INSTANTLY (no spinner on tab switch) ──────────
+    const cached = cacheGet<Order[]>(CACHE_ORDERS);
+    if (cached) {
+      setOrders(cached);
+      setIsLoading(false);
+    }
+
+    // ── 2. Revalidate from DB (background if cache hit, foreground if first load) ──
     fetchOrders();
     fetchPricingConfig();
 
@@ -301,52 +310,67 @@ export default function AdminOrders() {
         .select("id, name, hex_value")
         .eq("is_active", true)
         .order("sort_order");
-      if (data) {
-        setAvailableColors(data);
-      }
+      if (data) setAvailableColors(data);
     };
     fetchColors();
 
-    // Set up real-time subscription
+    // ── 3. Smart real-time subscription ─────────────────────────────────
+    //    Instead of calling fetchOrders() (5 queries!) on every event,
+    //    we fetch ONLY the changed order (3 queries) and patch local state.
     const channel = supabase
       .channel('admin-orders')
       .on(
         'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'orders',
-        },
-        (payload) => {
-          console.log('Order change detected:', payload);
-          // Show notification for new orders
+        { event: '*', schema: 'public', table: 'orders' },
+        async (payload) => {
+          // DELETE: just filter it out immediately
+          if (payload.eventType === 'DELETE') {
+            const id = (payload.old as { id: string }).id;
+            setOrders(prev => prev.filter(o => o.id !== id));
+            cachePatchItem(CACHE_ORDERS, { id } as Order, 'delete');
+            return;
+          }
+
           if (payload.eventType === 'INSERT') {
             toast.info("New order received!", {
               icon: <Bell className="w-4 h-4" />,
-              action: {
-                label: "View",
-                onClick: () => fetchOrders(),
-              },
             });
           }
-          fetchOrders();
+
+          // INSERT / UPDATE: fetch only this one order
+          const id = (payload.new as { id: string }).id;
+          const updated = await fetchSingleOrder(id);
+          if (!updated) return;
+
+          setOrders(prev => {
+            const idx = prev.findIndex(o => o.id === updated.id);
+            if (idx >= 0) {
+              const next = [...prev];
+              next[idx] = updated;
+              return next;
+            }
+            return [updated, ...prev]; // new order: prepend
+          });
+          cachePatchItem(CACHE_ORDERS, updated, 'upsert');
         }
       )
       .on(
         'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'payment_slips',
-        },
-        (payload) => {
-          console.log('Payment slip change detected:', payload);
+        { event: '*', schema: 'public', table: 'payment_slips' },
+        async (payload) => {
           if (payload.eventType === 'INSERT') {
             toast.info("New payment slip uploaded!", {
               icon: <FileImage className="w-4 h-4" />,
             });
           }
-          fetchOrders();
+          // Re-fetch only the parent order
+          const slip = payload.new as { order_id?: string };
+          const orderId = slip?.order_id;
+          if (!orderId) return;
+          const updated = await fetchSingleOrder(orderId);
+          if (!updated) return;
+          setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
+          cachePatchItem(CACHE_ORDERS, updated, 'upsert');
         }
       )
       .subscribe();
@@ -413,6 +437,66 @@ export default function AdminOrders() {
     
     setItemPrices(calculatedPrices);
     toast.success("Prices calculated based on configuration");
+  };
+
+  // ── Fetch a single order with its profile + coupon (used by realtime handler) ──
+  const fetchSingleOrder = async (orderId: string): Promise<Order | null> => {
+    try {
+      const { data: orderData, error } = await supabase
+        .from("orders")
+        .select(`
+          *,
+          order_items (
+            id, file_name, file_path, quantity, color, material, quality,
+            infill_percentage, price, notes, weight_grams
+          ),
+          payment_slips (
+            id, file_name, file_path, verified, uploaded_at
+          )
+        `)
+        .eq("id", orderId)
+        .single();
+
+      if (error || !orderData) return null;
+
+      const [profileRes, couponRes] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select("user_id, first_name, last_name, phone, address, email")
+          .eq("user_id", (orderData as any).user_id)
+          .single(),
+        supabase
+          .from("user_coupons")
+          .select(`used_on_order_id, coupons(id, code, discount_type, discount_value)`)
+          .eq("used_on_order_id", orderId)
+          .maybeSingle(),
+      ]);
+
+      const profile: Profile | null = profileRes.data
+        ? {
+            first_name: profileRes.data.first_name,
+            last_name: profileRes.data.last_name,
+            phone: profileRes.data.phone,
+            address: profileRes.data.address,
+            email: profileRes.data.email,
+          }
+        : null;
+
+      const c = couponRes.data?.coupons as any;
+      const applied_coupon: AppliedCoupon | null = c
+        ? { id: c.id, code: c.code, discount_type: c.discount_type, discount_value: c.discount_value }
+        : null;
+
+      return {
+        ...(orderData as any),
+        profile,
+        order_items: (orderData as any).order_items || [],
+        payment_slips: (orderData as any).payment_slips || [],
+        applied_coupon,
+      } as Order;
+    } catch {
+      return null;
+    }
   };
 
   const fetchOrders = async () => {
@@ -549,6 +633,8 @@ export default function AdminOrders() {
       }));
 
       setOrders(mappedOrders);
+      // Write to cache — next tab switch will be instant
+      cacheSet(CACHE_ORDERS, mappedOrders, 60_000);
     } catch (error) {
       console.error("Error in fetchOrders:", error);
       toast.error("Failed to load orders");
