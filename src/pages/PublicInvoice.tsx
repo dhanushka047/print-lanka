@@ -21,7 +21,7 @@ export default function PublicInvoice() {
   const fetchInvoice = async () => {
     setIsLoading(true);
     try {
-      const { data, error } = await supabase.rpc("get_public_invoice", {
+      const { data, error } = await supabase.rpc("get_public_invoice" as any, {
         p_order_id: orderId,
       });
 
@@ -138,6 +138,8 @@ export default function PublicInvoice() {
           appliedCoupon={coupon}
           status={order.status}
           extraCharges={order.extra_charges}
+          adminDiscountValue={order.admin_discount_value}
+          adminDiscountType={order.admin_discount_type}
         />
       </div>
     </div>

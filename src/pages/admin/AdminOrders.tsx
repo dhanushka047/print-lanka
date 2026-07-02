@@ -940,7 +940,7 @@ export default function AdminOrders() {
     
     const { data: order, error: orderError } = await supabase
       .from("orders")
-      .select("delivery_charge, admin_discount_value, admin_discount_type, total_price, user_id")
+      .select("delivery_charge, admin_discount_value, admin_discount_type, total_price, user_id, extra_charges")
       .eq("id", orderId)
       .single();
       
@@ -952,7 +952,10 @@ export default function AdminOrders() {
     
     const itemsTotal = items.reduce((sum, item) => sum + (item.price || 0), 0);
     const delivery = order.delivery_charge || 0;
-    const subtotal = itemsTotal + delivery;
+    const extraTotal = Array.isArray(order.extra_charges)
+      ? (order.extra_charges as any[]).reduce((sum, c) => sum + Number(c.price || 0), 0)
+      : 0;
+    const subtotal = itemsTotal + delivery + extraTotal;
     
     let couponDiscount = 0;
     const { data: userCoupons } = await supabase
@@ -1851,7 +1854,8 @@ export default function AdminOrders() {
                   {(() => {
                     const couponInfo = getAppliedCouponInfo(pricingOrder);
                     const itemsTotal = Object.values(itemPrices).reduce((sum, p) => sum + (p || 0), 0);
-                    const subtotal = itemsTotal + deliveryCharge;
+                    const extraChargesTotal = extraCharges.reduce((sum, c) => sum + (c.price || 0), 0);
+                    const subtotal = itemsTotal + deliveryCharge + extraChargesTotal;
                     const discountAmount = calculateDiscount(subtotal, couponInfo);
                     const adminDiscountAmount = calculateAdminDiscount(subtotal);
                     const customerPays = Math.max(0, subtotal - discountAmount - adminDiscountAmount);
@@ -1862,6 +1866,13 @@ export default function AdminOrders() {
                           <span className="text-muted-foreground">Items Total</span>
                           <span className="font-medium">{formatPrice(itemsTotal)}</span>
                         </div>
+
+                        {extraChargesTotal > 0 && (
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-muted-foreground">Extra Charges</span>
+                            <span className="font-medium">{formatPrice(extraChargesTotal)}</span>
+                          </div>
+                        )}
 
                         <div className="flex justify-between items-center text-sm">
                           <span className="text-muted-foreground">Delivery Charge</span>
@@ -2695,6 +2706,8 @@ export default function AdminOrders() {
                   appliedCoupon={invoiceOrder.applied_coupon}
                   status={invoiceOrder.status}
                   extraCharges={invoiceOrder.extra_charges}
+                  adminDiscountValue={invoiceOrder.admin_discount_value}
+                  adminDiscountType={invoiceOrder.admin_discount_type}
                 />
               </ScrollArea>
               

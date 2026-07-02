@@ -41,6 +41,8 @@ interface InvoiceProps {
   appliedCoupon?: AppliedCoupon | null;
   status: string;
   extraCharges?: { label: string; price: number }[] | null;
+  adminDiscountValue?: number | null;
+  adminDiscountType?: string | null;
 }
 
 interface InvoiceSettings {
@@ -81,6 +83,8 @@ export const Invoice = forwardRef<HTMLDivElement, InvoiceProps>(
       appliedCoupon,
       status,
       extraCharges,
+      adminDiscountValue = 0,
+      adminDiscountType = "amount",
     },
     ref
   ) => {
@@ -127,7 +131,15 @@ export const Invoice = forwardRef<HTMLDivElement, InvoiceProps>(
         ? Math.round((subtotal * appliedCoupon.discount_value) / 100)
         : appliedCoupon.discount_value
       : 0;
-    const grandTotal = Math.max(0, subtotal - discount);
+
+    let adminDiscount = 0;
+    if (adminDiscountValue && adminDiscountValue > 0) {
+      adminDiscount = adminDiscountType === "percentage"
+        ? Math.round((subtotal * adminDiscountValue) / 100)
+        : adminDiscountValue;
+    }
+
+    const grandTotal = Math.max(0, subtotal - discount - adminDiscount);
 
     const isPaid = status === "payment_approved" || status === "in_production" || 
                    status === "ready_to_ship" || status === "shipped" || status === "completed";
@@ -246,6 +258,12 @@ export const Invoice = forwardRef<HTMLDivElement, InvoiceProps>(
               <div className="flex justify-between py-1 border-b text-green-600">
                 <span>Coupon ({appliedCoupon.code}):</span>
                 <span>-{formatPrice(discount)}</span>
+              </div>
+            )}
+            {adminDiscount > 0 && (
+              <div className="flex justify-between py-1 border-b text-amber-600 font-medium">
+                <span>Admin Discount:</span>
+                <span>-{formatPrice(adminDiscount)}</span>
               </div>
             )}
             <div className="flex justify-between py-2 text-lg font-bold bg-teal-50 px-2 mt-2">
