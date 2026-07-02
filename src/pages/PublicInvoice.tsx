@@ -137,6 +137,7 @@ export default function PublicInvoice() {
           profile={profile}
           appliedCoupon={coupon}
           status={order.status}
+          extraCharges={order.extra_charges}
         />
       </div>
     </div>
