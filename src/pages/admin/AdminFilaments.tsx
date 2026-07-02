@@ -40,7 +40,7 @@ interface FilamentUsage {
   created_at: string;
   filaments?: { name: string; material: string };
   printers?: { name: string };
-  order_items?: { file_name: string; orders?: { id: string } };
+  order_items?: { file_name: string; order_id: string };
 }
 
 export default function AdminFilaments() {
