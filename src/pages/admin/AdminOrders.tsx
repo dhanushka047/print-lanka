@@ -109,6 +109,7 @@ export default function AdminOrders() {
   const [adminDiscountValue, setAdminDiscountValue] = useState<number>(0);
   const [adminDiscountType, setAdminDiscountType] = useState<"amount" | "percentage">("amount");
   const [isSavingPrices, setIsSavingPrices] = useState(false);
+  const [extraCharges, setExtraCharges] = useState<{ id: string; label: string; price: number }[]>([]);
   const [viewingSlip, setViewingSlip] = useState<string | null>(null);
   const [viewingSlipOrderId, setViewingSlipOrderId] = useState<string | null>(null);
   const [detailsOrder, setDetailsOrder] = useState<Order | null>(null);
@@ -766,11 +767,21 @@ export default function AdminOrders() {
     setDeliveryCharge(Number(order.delivery_charge) || 350);
     setAdminDiscountValue(Number(order.admin_discount_value) || 0);
     setAdminDiscountType((order.admin_discount_type as "amount" | "percentage") || "amount");
+
+    const initialCharges = Array.isArray(order.extra_charges) 
+      ? (order.extra_charges as any[]).map((c, index) => ({
+          id: c.id || String(index),
+          label: c.label || "",
+          price: Number(c.price) || 0
+        }))
+      : [];
+    setExtraCharges(initialCharges);
   };
 
   const calculateTotal = () => {
     const itemsTotal = Object.values(itemPrices).reduce((sum, price) => sum + (price || 0), 0);
-    return itemsTotal + deliveryCharge;
+    const extraChargesTotal = extraCharges.reduce((sum, c) => sum + (c.price || 0), 0);
+    return itemsTotal + deliveryCharge + extraChargesTotal;
   };
 
   // Calculate discount from applied coupon (or fallback to notes)
@@ -849,6 +860,7 @@ export default function AdminOrders() {
         delivery_charge: deliveryCharge,
         admin_discount_value: adminDiscountValue || 0,
         admin_discount_type: adminDiscountType,
+        extra_charges: extraCharges,
       };
 
       if (isFirstPricing) {
@@ -1424,7 +1436,23 @@ export default function AdminOrders() {
                           <span className="text-xs text-muted-foreground">No slip</span>
                         )}
                       </TableCell>
-                      <TableCell>{getStatusBadge(order.status)}</TableCell>
+                      <TableCell>
+                        <Select
+                          value={order.status}
+                          onValueChange={(v) => handleStatusChange(order.id, v, order)}
+                        >
+                          <SelectTrigger className="w-auto h-auto p-0 border-none shadow-none focus:ring-0 bg-transparent cursor-pointer">
+                            {getStatusBadge(order.status)}
+                          </SelectTrigger>
+                          <SelectContent>
+                            {statusOptions.map((status) => (
+                              <SelectItem key={status} value={status} className="text-xs">
+                                {ORDER_STATUSES[status as keyof typeof ORDER_STATUSES]?.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {new Date(order.created_at).toLocaleDateString()}
                       </TableCell>
@@ -1507,21 +1535,6 @@ export default function AdminOrders() {
                           >
                             <Trash2 className="w-4 h-4" />
                           </Button>
-                          <Select
-                            value={order.status}
-                            onValueChange={(v) => handleStatusChange(order.id, v, order)}
-                          >
-                            <SelectTrigger className="w-32 h-8 text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {statusOptions.map((status) => (
-                                <SelectItem key={status} value={status} className="text-xs">
-                                  {ORDER_STATUSES[status as keyof typeof ORDER_STATUSES]?.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1745,6 +1758,66 @@ export default function AdminOrders() {
                         onChange={(e) => setDeliveryCharge(Number(e.target.value))}
                       />
                     </div>
+                  </div>
+
+                  {/* Extra Charges Section */}
+                  <div className="space-y-3 border rounded-lg p-3 bg-muted/30">
+                    <div className="flex justify-between items-center">
+                      <Label className="font-semibold flex items-center gap-1 text-sm">
+                        <DollarSign className="w-4 h-4 text-primary" />
+                        Extra Charges
+                      </Label>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setExtraCharges([...extraCharges, { id: Math.random().toString(), label: "", price: 0 }])}
+                        className="h-8 text-xs gap-1"
+                      >
+                        + Add Extra Charge
+                      </Button>
+                    </div>
+
+                    {extraCharges.length > 0 ? (
+                      <div className="space-y-2">
+                        {extraCharges.map((charge, idx) => (
+                          <div key={charge.id} className="flex gap-2 items-center">
+                            <Input
+                              placeholder="e.g. Design Cost, Post-processing"
+                              value={charge.label}
+                              onChange={(e) => {
+                                const newCharges = [...extraCharges];
+                                newCharges[idx].label = e.target.value;
+                                setExtraCharges(newCharges);
+                              }}
+                              className="flex-1 h-9 text-sm"
+                            />
+                            <Input
+                              type="number"
+                              placeholder="Price"
+                              value={charge.price || ""}
+                              onChange={(e) => {
+                                const newCharges = [...extraCharges];
+                                newCharges[idx].price = Number(e.target.value) || 0;
+                                setExtraCharges(newCharges);
+                              }}
+                              className="w-28 h-9 text-sm"
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="text-destructive h-9 w-9 p-0 hover:bg-destructive/10"
+                              onClick={() => setExtraCharges(extraCharges.filter(c => c.id !== charge.id))}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground italic">No extra charges added yet.</p>
+                    )}
                   </div>
 
                   {/* Admin Discount */}
@@ -2061,7 +2134,10 @@ export default function AdminOrders() {
                       {(() => {
                         const itemsTotal = detailsOrder.order_items.reduce((sum, item) => sum + (item.price || 0), 0);
                         const delivery = detailsOrder.delivery_charge || 0;
-                        const subtotal = itemsTotal + delivery;
+                        const extraTotal = Array.isArray(detailsOrder.extra_charges)
+                          ? (detailsOrder.extra_charges as any[]).reduce((sum, c) => sum + Number(c.price || 0), 0)
+                          : 0;
+                        const subtotal = itemsTotal + delivery + extraTotal;
                         const discount = detailsOrder.applied_coupon
                           ? detailsOrder.applied_coupon.discount_type === "percentage"
                             ? Math.round((subtotal * detailsOrder.applied_coupon.discount_value) / 100)
@@ -2078,6 +2154,12 @@ export default function AdminOrders() {
                               <span className="text-muted-foreground">Delivery Charge:</span>
                               <span>{formatPrice(delivery)}</span>
                             </div>
+                            {Array.isArray(detailsOrder.extra_charges) && (detailsOrder.extra_charges as any[]).map((charge, idx) => (
+                              <div key={idx} className="flex justify-between text-sm">
+                                <span className="text-muted-foreground">{charge.label || 'Extra Charge'}:</span>
+                                <span>{formatPrice(Number(charge.price || 0))}</span>
+                              </div>
+                            ))}
                             {detailsOrder.applied_coupon && (
                               <div className="flex justify-between text-sm text-green-600">
                                 <span className="flex items-center gap-1">
@@ -2612,6 +2694,7 @@ export default function AdminOrders() {
                   profile={invoiceOrder.profile}
                   appliedCoupon={invoiceOrder.applied_coupon}
                   status={invoiceOrder.status}
+                  extraCharges={invoiceOrder.extra_charges}
                 />
               </ScrollArea>
               
