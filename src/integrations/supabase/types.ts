@@ -975,6 +975,139 @@ export type Database = {
         }
         Relationships: []
       }
+      filaments: {
+        Row: {
+          brand: string | null
+          color: string
+          cost: number
+          created_at: string
+          id: string
+          is_over: boolean
+          low_threshold: number
+          material: string
+          name: string
+          weight_remaining: number
+          weight_total: number
+          supplier: string | null
+          purchase_date: string
+        }
+        Insert: {
+          brand?: string | null
+          color: string
+          cost?: number
+          created_at?: string
+          id?: string
+          is_over?: boolean
+          low_threshold?: number
+          material: string
+          name: string
+          weight_remaining?: number
+          weight_total?: number
+          supplier?: string | null
+          purchase_date?: string
+        }
+        Update: {
+          brand?: string | null
+          color?: string
+          cost?: number
+          created_at?: string
+          id?: string
+          is_over?: boolean
+          low_threshold?: number
+          material?: string
+          name?: string
+          weight_remaining?: number
+          weight_total?: number
+          supplier?: string | null
+          purchase_date?: string
+        }
+        Relationships: []
+      }
+      printers: {
+        Row: {
+          created_at: string
+          hourly_cost: number
+          id: string
+          monthly_premium: number
+          name: string
+          status: string
+          terms_count: number
+        }
+        Insert: {
+          created_at?: string
+          hourly_cost?: number
+          id?: string
+          monthly_premium?: number
+          name: string
+          status?: string
+          terms_count?: number
+        }
+        Update: {
+          created_at?: string
+          hourly_cost?: number
+          id?: string
+          monthly_premium?: number
+          name?: string
+          status?: string
+          terms_count?: number
+        }
+        Relationships: []
+      }
+      filament_usages: {
+        Row: {
+          created_at: string
+          filament_id: string | null
+          id: string
+          notes: string | null
+          order_item_id: string | null
+          print_hours: number
+          printer_id: string | null
+          weight_used: number
+        }
+        Insert: {
+          created_at?: string
+          filament_id?: string | null
+          id?: string
+          notes?: string | null
+          order_item_id?: string | null
+          print_hours?: number
+          printer_id?: string | null
+          weight_used: number
+        }
+        Update: {
+          created_at?: string
+          filament_id?: string | null
+          id?: string
+          notes?: string | null
+          order_item_id?: string | null
+          print_hours?: number
+          printer_id?: string | null
+          weight_used?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "filament_usages_filament_id_fkey"
+            columns: ["filament_id"]
+            isOneToOne: false
+            referencedRelation: "filaments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "filament_usages_order_item_id_fkey"
+            columns: ["order_item_id"]
+            isOneToOne: false
+            referencedRelation: "order_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "filament_usages_printer_id_fkey"
+            columns: ["printer_id"]
+            isOneToOne: false
+            referencedRelation: "printers"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
     }
     Views: {
       [_ in never]: never
