@@ -35,6 +35,9 @@ import AdminShopSettings from "./pages/admin/AdminShopSettings";
 import AdminCategories from "./pages/admin/AdminCategories";
 import AdminSMSCampaigns from "./pages/admin/AdminSMSCampaigns";
 import AdminBackup from "./pages/admin/AdminBackup";
+import AdminFilaments from "./pages/admin/AdminFilaments";
+import AdminPrinters from "./pages/admin/AdminPrinters";
+import PublicInvoice from "./pages/PublicInvoice";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -59,6 +62,7 @@ const App = () => (
             <Route path="/privacy-policy" element={<PrivacyPolicy />} />
             <Route path="/terms-conditions" element={<TermsConditions />} />
             <Route path="/refund-policy" element={<RefundPolicy />} />
+            <Route path="/invoice/:orderId" element={<PublicInvoice />} />
             
             {/* Shop Routes */}
             <Route path="/shop" element={<Shop />} />
@@ -82,6 +86,8 @@ const App = () => (
               <Route path="shop-settings" element={<AdminShopSettings />} />
               <Route path="sms-campaigns" element={<AdminSMSCampaigns />} />
               <Route path="backup" element={<AdminBackup />} />
+              <Route path="filaments" element={<AdminFilaments />} />
+              <Route path="printers" element={<AdminPrinters />} />
             </Route>
             
             <Route path="*" element={<NotFound />} />
