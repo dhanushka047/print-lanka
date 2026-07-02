@@ -161,21 +161,27 @@ export default function AdminDashboard() {
       // 5. Aggregate metrics by month
       const monthlyStats: Record<string, { month: string; revenue: number; cost: number; profit: number }> = {};
 
-      ordersData?.forEach(order => {
-        const date = new Date(order.created_at);
-        const monthKey = date.toLocaleString("default", { month: "short", year: "numeric" });
+      const initMonth = (monthKey: string) => {
         if (!monthlyStats[monthKey]) {
           monthlyStats[monthKey] = { month: monthKey, revenue: 0, cost: 0, profit: 0 };
         }
+      };
+
+      // Always ensure current month is in chart
+      const currentMonthKey = new Date().toLocaleString("default", { month: "short", year: "numeric" });
+      initMonth(currentMonthKey);
+
+      ordersData?.forEach(order => {
+        const date = new Date(order.created_at);
+        const monthKey = date.toLocaleString("default", { month: "short", year: "numeric" });
+        initMonth(monthKey);
         monthlyStats[monthKey].revenue += Number(order.total_price || 0);
       });
 
       usagesData?.forEach(usage => {
         const date = new Date(usage.created_at);
         const monthKey = date.toLocaleString("default", { month: "short", year: "numeric" });
-        if (!monthlyStats[monthKey]) {
-          monthlyStats[monthKey] = { month: monthKey, revenue: 0, cost: 0, profit: 0 };
-        }
+        initMonth(monthKey);
 
         const spoolCost = usage.filaments?.cost ? Number(usage.filaments.cost) : 0;
         const spoolWeight = usage.filaments?.weight_total ? Number(usage.filaments.weight_total) : 1000;
@@ -187,16 +193,11 @@ export default function AdminDashboard() {
         monthlyStats[monthKey].cost += Math.round(matCost + machineCost);
       });
 
-      // Add monthly premiums to costs
+      // Add monthly premiums to costs for EVERY month in the dataset
       const totalPremiums = printersData?.reduce((sum, p) => sum + Number(p.monthly_premium || 0), 0) || 0;
-      const currentMonthKey = new Date().toLocaleString("default", { month: "short", year: "numeric" });
-      if (!monthlyStats[currentMonthKey]) {
-        monthlyStats[currentMonthKey] = { month: currentMonthKey, revenue: 0, cost: 0, profit: 0 };
-      }
-      monthlyStats[currentMonthKey].cost += totalPremiums;
-
-      Object.keys(monthlyStats).forEach(key => {
-        monthlyStats[key].profit = monthlyStats[key].revenue - monthlyStats[key].cost;
+      Object.keys(monthlyStats).forEach(monthKey => {
+        monthlyStats[monthKey].cost += totalPremiums;
+        monthlyStats[monthKey].profit = monthlyStats[monthKey].revenue - monthlyStats[monthKey].cost;
       });
 
       const chartData = Object.values(monthlyStats).sort((a, b) => {

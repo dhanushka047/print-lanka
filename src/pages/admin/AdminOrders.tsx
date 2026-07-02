@@ -15,7 +15,7 @@ import {
   Loader2, ChevronDown, ChevronUp, DollarSign, Send, FileImage, 
   Search, Download, Eye, RefreshCw, Bell, MapPin, Phone, Mail,
   Package, Calendar, FileText, Calculator, Percent, Tag, Truck, Edit2,
-  Trash2, AlertTriangle, Copy, ExternalLink
+  Trash2, AlertTriangle, Copy, ExternalLink, Printer
 } from "lucide-react";
 import { formatPrice, ORDER_STATUSES } from "@/lib/constants";
 import { toast } from "sonner";
@@ -1489,6 +1489,14 @@ export default function AdminOrders() {
                             onClick={() => handleCopyInvoiceLink(order.id)}
                           >
                             <Copy className="w-4 h-4 text-emerald-600" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            title="Assign Printer & Spool"
+                            onClick={() => setPrintLogDialog({ orderId: order.id, order })}
+                          >
+                            <Printer className="w-4 h-4 text-indigo-600" />
                           </Button>
                           <Button
                             size="sm"
