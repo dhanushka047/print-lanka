@@ -336,12 +336,14 @@ export type Database = {
           tracking_number: string | null
           updated_at: string
           user_id: string
+          extra_charges: Json | null
         }
         Insert: {
           admin_discount_type?: string
           admin_discount_value?: number
           created_at?: string
           delivery_charge?: number | null
+          extra_charges?: Json | null
           id?: string
           notes?: string | null
           paid_at?: string | null
@@ -359,6 +361,7 @@ export type Database = {
           admin_discount_value?: number
           created_at?: string
           delivery_charge?: number | null
+          extra_charges?: Json | null
           id?: string
           notes?: string | null
           paid_at?: string | null
