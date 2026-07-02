@@ -40,6 +40,7 @@ interface InvoiceProps {
   profile: Profile | null;
   appliedCoupon?: AppliedCoupon | null;
   status: string;
+  extraCharges?: { label: string; price: number }[] | null;
 }
 
 interface InvoiceSettings {
@@ -79,6 +80,7 @@ export const Invoice = forwardRef<HTMLDivElement, InvoiceProps>(
       profile,
       appliedCoupon,
       status,
+      extraCharges,
     },
     ref
   ) => {
@@ -116,7 +118,10 @@ export const Invoice = forwardRef<HTMLDivElement, InvoiceProps>(
 
     // Calculate pricing breakdown
     const itemsTotal = orderItems.reduce((sum, item) => sum + (item.price || 0), 0);
-    const subtotal = itemsTotal + deliveryCharge;
+    const extraTotal = Array.isArray(extraCharges)
+      ? extraCharges.reduce((sum, c) => sum + (c.price || 0), 0)
+      : 0;
+    const subtotal = itemsTotal + deliveryCharge + extraTotal;
     const discount = appliedCoupon
       ? appliedCoupon.discount_type === "percentage"
         ? Math.round((subtotal * appliedCoupon.discount_value) / 100)
@@ -227,6 +232,12 @@ export const Invoice = forwardRef<HTMLDivElement, InvoiceProps>(
               <span>Delivery Charge:</span>
               <span>{formatPrice(deliveryCharge)}</span>
             </div>
+            {Array.isArray(extraCharges) && extraCharges.map((charge, idx) => (
+              <div key={idx} className="flex justify-between py-1 border-b">
+                <span>{charge.label || 'Extra Charge'}:</span>
+                <span>{formatPrice(charge.price || 0)}</span>
+              </div>
+            ))}
             <div className="flex justify-between py-1 border-b font-medium">
               <span>Subtotal:</span>
               <span>{formatPrice(subtotal)}</span>
