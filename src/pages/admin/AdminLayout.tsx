@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { 
   LayoutDashboard, Tag, Palette, Package, Users, Settings, 
   ChevronLeft, Loader2, Building2, ImageIcon, ShoppingBag, ShoppingCart, Truck,
-  FolderOpen, MessageSquare, Database
+  FolderOpen, MessageSquare, Database, Printer, Layers
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +15,8 @@ import { Separator } from "@/components/ui/separator";
 const navItems = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
   { href: "/admin/orders", label: "3D Print Orders", icon: Package, showBadge: true },
+  { href: "/admin/filaments", label: "Filaments", icon: Layers },
+  { href: "/admin/printers", label: "Printers", icon: Printer },
   { href: "/admin/coupons", label: "Coupons", icon: Tag },
   { href: "/admin/colors", label: "Colors", icon: Palette },
   { href: "/admin/users", label: "Users", icon: Users },

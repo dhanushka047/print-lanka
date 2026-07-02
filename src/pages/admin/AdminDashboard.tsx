@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { supabase } from "@/integrations/supabase/client";
-import { Package, Users, Tag, Palette, Clock, MessageSquare, AlertTriangle } from "lucide-react";
+import { 
+  Package, Users, Tag, Palette, Clock, MessageSquare, AlertTriangle,
+  TrendingUp, TrendingDown, DollarSign, Activity, Layers, Printer, Loader2
+} from "lucide-react";
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer 
+} from "recharts";
+import { formatPrice } from "@/lib/constants";
 
 interface Stats {
   totalOrders: number;
@@ -19,6 +26,20 @@ interface SMSBalance {
   error: string | null;
 }
 
+interface PLChartData {
+  month: string;
+  revenue: number;
+  cost: number;
+  profit: number;
+}
+
+interface LowFilamentAlert {
+  id: string;
+  name: string;
+  weight_remaining: number;
+  low_threshold: number;
+}
+
 export default function AdminDashboard() {
   const [stats, setStats] = useState<Stats>({
     totalOrders: 0,
@@ -33,6 +54,14 @@ export default function AdminDashboard() {
     lowBalance: false,
     loading: true,
     error: null,
+  });
+
+  const [plData, setPlData] = useState<PLChartData[]>([]);
+  const [lowFilaments, setLowFilaments] = useState<LowFilamentAlert[]>([]);
+  const [financialTotals, setFinancialTotals] = useState({
+    revenue: 0,
+    cost: 0,
+    profit: 0
   });
 
   useEffect(() => {
@@ -52,7 +81,6 @@ export default function AdminDashboard() {
         activeCoupons: couponsRes.count || 0,
         totalColors: colorsRes.count || 0,
       });
-      setIsLoading(false);
     };
 
     const fetchSMSBalance = async () => {
@@ -96,8 +124,107 @@ export default function AdminDashboard() {
       }
     };
 
-    fetchStats();
-    fetchSMSBalance();
+    const fetchFinancialsAndAlerts = async () => {
+      // 1. Fetch completed/paid orders
+      const { data: ordersData } = await supabase
+        .from("orders")
+        .select("id, total_price, created_at")
+        .in("status", ["completed", "shipped", "ready_to_ship", "in_production", "payment_approved"])
+        .not("total_price", "is", null);
+
+      // 2. Fetch filament usages with spools and printers
+      const { data: usagesData } = await supabase
+        .from("filament_usages")
+        .select(`
+          weight_used,
+          print_hours,
+          created_at,
+          filaments (cost, weight_total),
+          printers (hourly_cost)
+        `);
+
+      // 3. Fetch active printers monthly premiums
+      const { data: printersData } = await supabase
+        .from("printers")
+        .select("monthly_premium")
+        .eq("status", "active");
+
+      // 4. Calculate low filaments
+      const { data: filamentsData } = await supabase
+        .from("filaments")
+        .select("id, name, weight_remaining, low_threshold")
+        .eq("is_over", false);
+      
+      const alerts = filamentsData?.filter(f => Number(f.weight_remaining) <= Number(f.low_threshold)) || [];
+      setLowFilaments(alerts);
+
+      // 5. Aggregate metrics by month
+      const monthlyStats: Record<string, { month: string; revenue: number; cost: number; profit: number }> = {};
+
+      ordersData?.forEach(order => {
+        const date = new Date(order.created_at);
+        const monthKey = date.toLocaleString("default", { month: "short", year: "numeric" });
+        if (!monthlyStats[monthKey]) {
+          monthlyStats[monthKey] = { month: monthKey, revenue: 0, cost: 0, profit: 0 };
+        }
+        monthlyStats[monthKey].revenue += Number(order.total_price || 0);
+      });
+
+      usagesData?.forEach(usage => {
+        const date = new Date(usage.created_at);
+        const monthKey = date.toLocaleString("default", { month: "short", year: "numeric" });
+        if (!monthlyStats[monthKey]) {
+          monthlyStats[monthKey] = { month: monthKey, revenue: 0, cost: 0, profit: 0 };
+        }
+
+        const spoolCost = usage.filaments?.cost ? Number(usage.filaments.cost) : 0;
+        const spoolWeight = usage.filaments?.weight_total ? Number(usage.filaments.weight_total) : 1000;
+        const matCost = spoolWeight > 0 ? usage.weight_used * (spoolCost / spoolWeight) : 0;
+
+        const hourlyCost = usage.printers?.hourly_cost ? Number(usage.printers.hourly_cost) : 0;
+        const machineCost = usage.print_hours * hourlyCost;
+
+        monthlyStats[monthKey].cost += Math.round(matCost + machineCost);
+      });
+
+      // Add monthly premiums to costs
+      const totalPremiums = printersData?.reduce((sum, p) => sum + Number(p.monthly_premium || 0), 0) || 0;
+      const currentMonthKey = new Date().toLocaleString("default", { month: "short", year: "numeric" });
+      if (!monthlyStats[currentMonthKey]) {
+        monthlyStats[currentMonthKey] = { month: currentMonthKey, revenue: 0, cost: 0, profit: 0 };
+      }
+      monthlyStats[currentMonthKey].cost += totalPremiums;
+
+      Object.keys(monthlyStats).forEach(key => {
+        monthlyStats[key].profit = monthlyStats[key].revenue - monthlyStats[key].cost;
+      });
+
+      const chartData = Object.values(monthlyStats).sort((a, b) => {
+        return new Date(a.month).getTime() - new Date(b.month).getTime();
+      });
+
+      setPlData(chartData);
+
+      const revTotal = chartData.reduce((sum, item) => sum + item.revenue, 0);
+      const costTotal = chartData.reduce((sum, item) => sum + item.cost, 0);
+      setFinancialTotals({
+        revenue: revTotal,
+        cost: costTotal,
+        profit: revTotal - costTotal
+      });
+    };
+
+    const loadAllData = async () => {
+      setIsLoading(true);
+      await Promise.all([
+        fetchStats(),
+        fetchSMSBalance(),
+        fetchFinancialsAndAlerts()
+      ]);
+      setIsLoading(false);
+    };
+
+    loadAllData();
   }, []);
 
   const statCards = [
@@ -112,7 +239,7 @@ export default function AdminDashboard() {
     <div className="space-y-8">
       <div>
         <h1 className="font-display text-3xl font-bold">Dashboard</h1>
-        <p className="text-muted-foreground">Overview of your 3D printing business</p>
+        <p className="text-muted-foreground">Overview of your 3D printing business and financials</p>
       </div>
 
       {/* SMS Balance Warning */}
@@ -127,6 +254,27 @@ export default function AdminDashboard() {
         </Alert>
       )}
 
+      {/* Low Filament Alerts */}
+      {lowFilaments.length > 0 && (
+        <Alert className="border-amber-200 bg-amber-50 dark:bg-amber-950/20 text-amber-800 dark:text-amber-300 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-amber-500 mt-0.5" />
+          <div>
+            <AlertTitle className="font-bold">Low Filament Alert!</AlertTitle>
+            <AlertDescription className="text-sm">
+              The following spools are running low:
+              <ul className="list-disc pl-5 mt-1 grid grid-cols-1 md:grid-cols-2 gap-1 font-semibold">
+                {lowFilaments.map((f) => (
+                  <li key={f.id}>
+                    {f.name} ({f.weight_remaining}g remaining)
+                  </li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </div>
+        </Alert>
+      )}
+
+      {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
         {statCards.map((stat) => (
           <Card key={stat.title}>
@@ -165,6 +313,94 @@ export default function AdminDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Financial Overview Cards */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card className="bg-primary/5 border-primary/20">
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <div>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Total Revenue</CardTitle>
+              <CardDescription>Sum of paid 3D print orders</CardDescription>
+            </div>
+            <DollarSign className="w-5 h-5 text-primary" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold text-primary">
+              {isLoading ? "..." : formatPrice(financialTotals.revenue)}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-destructive/5 border-destructive/20">
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <div>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Printing Expenses</CardTitle>
+              <CardDescription>Material & machine costs</CardDescription>
+            </div>
+            <TrendingDown className="w-5 h-5 text-destructive" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold text-destructive">
+              {isLoading ? "..." : formatPrice(financialTotals.cost)}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-emerald-50/50 dark:bg-emerald-950/10 border-emerald-200 dark:border-emerald-900">
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <div>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Estimated Profit</CardTitle>
+              <CardDescription>Revenue minus printing expenses</CardDescription>
+            </div>
+            <TrendingUp className="w-5 h-5 text-emerald-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">
+              {isLoading ? "..." : formatPrice(financialTotals.profit)}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* P&L Graph */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Profit & Loss Analytics</CardTitle>
+          <CardDescription>Monthly visualization of business revenue, costs, and profits</CardDescription>
+        </CardHeader>
+        <CardContent className="pt-4">
+          <div className="h-[350px] w-full">
+            {isLoading ? (
+              <div className="flex items-center justify-center h-full">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+              </div>
+            ) : plData.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+                No financial history found.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={plData}
+                  margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="month" />
+                  <YAxis tickFormatter={(val) => `Rs.${val / 1000}k`} />
+                  <Tooltip 
+                    formatter={(val: number) => [formatPrice(val), ""]}
+                    contentStyle={{ borderRadius: "8px" }}
+                  />
+                  <Legend />
+                  <Bar dataKey="revenue" name="Revenue" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="cost" name="Expenses" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="profit" name="Profit" fill="#10b981" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
